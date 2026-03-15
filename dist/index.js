@@ -11,9 +11,9 @@ const auth_1 = __importDefault(require("./routes/auth"));
 const projects_1 = __importDefault(require("./routes/projects"));
 const ingest_1 = __importDefault(require("./routes/ingest"));
 const admin_1 = __importDefault(require("./routes/admin"));
+const machine_1 = __importDefault(require("./routes/machine"));
+const export_1 = __importDefault(require("./routes/export"));
 // ── Startup guards ────────────────────────────────────────────────────────────
-// Fail immediately if required secrets are absent — better to crash at boot
-// than to serve requests with broken auth or licensing.
 if (!process.env['JWT_SECRET']) {
     throw new Error('JWT_SECRET environment variable is required');
 }
@@ -30,7 +30,6 @@ const ALLOWED_ORIGIN_PATTERNS = [
 ];
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
-        // Allow requests with no Origin header (curl, Postman, server-to-server)
         if (!origin || ALLOWED_ORIGIN_PATTERNS.some((pattern) => pattern.test(origin))) {
             callback(null, true);
         }
@@ -39,7 +38,7 @@ app.use((0, cors_1.default)({
         }
     },
     credentials: true,
-    allowedHeaders: ['Authorization', 'Content-Type'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'x-api-key'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 }));
 app.use(express_1.default.json({ limit: '1mb' }));
@@ -50,6 +49,9 @@ app.get('/health', (_req, res) => {
 app.use('/api/auth', auth_1.default);
 app.use('/api/projects', projects_1.default);
 app.use('/api/admin', admin_1.default);
+app.use('/api/export', export_1.default);
+// machine router carries its own express.json({ limit: '5mb' }) for batch ingest
+app.use('/api/machine', machine_1.default);
 app.use('/api', ingest_1.default);
 // ── Global error handler ──────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -57,9 +59,26 @@ app.use((err, _req, res, _next) => {
     console.error('[error]', err);
     res.status(500).json({ error: 'Internal server error.' });
 });
+// ── Tier-1 pruning ────────────────────────────────────────────────────────────
+async function pruneTier1() {
+    try {
+        const result = await db_1.pool.query(`
+      DELETE FROM telemetry
+      WHERE project_id IN (SELECT id FROM projects WHERE tier = 1)
+        AND timestamp < NOW() - INTERVAL '2 days'
+    `);
+        console.log(`[prune] Tier-1 rows deleted: ${result.rowCount ?? 0}`);
+    }
+    catch (err) {
+        console.error('[prune] Error during tier-1 pruning:', err);
+    }
+}
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function start() {
     await (0, db_1.initDb)();
+    // Run immediately on boot to clear backlog, then every hour
+    await pruneTier1();
+    setInterval(() => { void pruneTier1(); }, 60 * 60 * 1000);
     const server = app.listen(PORT, '0.0.0.0', () => {
         console.log(`[server] Listening on 0.0.0.0:${PORT}`);
     });

@@ -46,12 +46,18 @@ async function initDb() {
     -- ── Projects ────────────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS projects (
       id         BIGSERIAL    PRIMARY KEY,
-      user_id    BIGINT       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id    BIGINT       REFERENCES users(id) ON DELETE CASCADE,
       name       VARCHAR(255) NOT NULL,
       tier       INT          NOT NULL DEFAULT 1,
       api_key    VARCHAR(255) UNIQUE NOT NULL,
       created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
     );
+
+    -- Machine-activated projects: user_id is assigned later by an admin.
+    ALTER TABLE projects ALTER COLUMN user_id DROP NOT NULL;
+
+    -- Prevents the same license blob from activating more than one machine.
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS license_fingerprint VARCHAR(64) UNIQUE;
 
     CREATE INDEX IF NOT EXISTS idx_projects_user_id
       ON projects (user_id);
