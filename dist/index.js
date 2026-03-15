@@ -23,14 +23,15 @@ if (!process.env['MASTER_KEY']) {
 const app = (0, express_1.default)();
 const PORT = Number(process.env['PORT']) || 8080;
 // ── Middleware ────────────────────────────────────────────────────────────────
-const ALLOWED_ORIGINS = [
-    'https://technicat-website.vercel.app',
-    'http://localhost:5173',
+const ALLOWED_ORIGIN_PATTERNS = [
+    /^http:\/\/localhost:5173$/,
+    /\.vercel\.app$/,
+    /technicatgroup\.com$/,
 ];
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
         // Allow requests with no Origin header (curl, Postman, server-to-server)
-        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+        if (!origin || ALLOWED_ORIGIN_PATTERNS.some((pattern) => pattern.test(origin))) {
             callback(null, true);
         }
         else {
