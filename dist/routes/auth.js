@@ -24,29 +24,33 @@ function isValidEmail(value) {
  * Sends the 2FA code by email when SMTP env vars are configured.
  * Falls back to console logging in development.
  */
-async function sendTwoFactorEmail(to, code) {
-    const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
-    if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
-        try {
-            const transporter = nodemailer_1.default.createTransport({
-                host: SMTP_HOST,
-                port: Number(SMTP_PORT ?? 587),
-                secure: Number(SMTP_PORT ?? 587) === 465,
-                auth: { user: SMTP_USER, pass: SMTP_PASS },
-            });
-            await transporter.sendMail({
-                from: `"TechniDAQ Security" <${SMTP_USER}>`,
-                to,
-                subject: 'Your TechniDAQ login code',
-                text: `Your verification code is: ${code}\n\nThis code expires in 10 minutes.`,
-            });
+function sendTwoFactorEmail(to, code) {
+    const { SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
+    if (SMTP_USER && SMTP_PASS) {
+        // family:4 forces IPv4 — prevents ENETUNREACH on Render's IPv6 nodes.
+        // connectionTimeout/greetingTimeout cap any SMTP hang to 5 s max so the
+        // background task never saturates the event loop.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const transporter = nodemailer_1.default.createTransport({
+            host: 'smtp.gmail.com',
+            port: Number(SMTP_PORT ?? 587),
+            secure: Number(SMTP_PORT ?? 587) === 465,
+            family: 4,
+            connectionTimeout: 5_000,
+            greetingTimeout: 5_000,
+            auth: { user: SMTP_USER, pass: SMTP_PASS },
+        });
+        transporter.sendMail({
+            from: `"TechniDAQ Security" <${SMTP_USER}>`,
+            to,
+            subject: 'Your TechniDAQ login code',
+            text: `Your verification code is: ${code}\n\nThis code expires in 10 minutes.`,
+        }).then(() => {
             console.log(`[2FA] Code emailed to ${to}`);
-        }
-        catch (err) {
-            // SMTP failure must never block login — fall back to console
-            console.error('[2FA] SMTP error, falling back to console:', err);
+        }).catch((err) => {
+            console.error('[2FA] SMTP background error:', err);
             console.log(`[2FA] Code for ${to}: ${code}`);
-        }
+        });
     }
     else {
         console.log(`[2FA] Code for ${to}: ${code}`);
@@ -99,7 +103,7 @@ router.post('/login', async (req, res) => {
     // ── CLIENT: return JWT immediately ──────────────────────────────────────────
     if (user.role === 'CLIENT') {
         const token = jsonwebtoken_1.default.sign({ sub: user.id, email: user.email, role: user.role }, getJwtSecret(), { expiresIn: '24h' });
-        res.status(200).json({ token });
+        res.status(200).json({ token, user: { id: user.id, email: user.email, role: user.role } });
         return;
     }
     // ── MASTER / SUB_MASTER: trigger 2FA challenge ───────────────────────────────
@@ -109,30 +113,36 @@ router.post('/login', async (req, res) => {
     await db_1.pool.query(`UPDATE users
      SET two_factor_code = $1, two_factor_expires = NOW() + INTERVAL '10 minutes'
      WHERE id = $2`, [code, user.id]);
-    await sendTwoFactorEmail(user.email, code);
+    // Respond instantly — email is dispatched in the background inside sendTwoFactorEmail
+    sendTwoFactorEmail(user.email, code);
     res.status(200).json({ requires_2fa: true, email: user.email });
 });
 // ── POST /api/auth/verify-2fa ─────────────────────────────────────────────────
 router.post('/verify-2fa', async (req, res) => {
-    const { email, code } = req.body;
-    if (typeof email !== 'string' || typeof code !== 'string') {
-        res.status(400).json({ error: 'email and code are required.' });
-        return;
+    try {
+        const { email, code } = req.body;
+        if (typeof email !== 'string' || typeof code !== 'string') {
+            res.status(400).json({ error: 'email and code are required.' });
+            return;
+        }
+        const result = await db_1.pool.query(`SELECT id, email, role FROM users
+       WHERE email = $1
+         AND two_factor_code = $2
+         AND two_factor_expires > NOW()`, [email.toLowerCase(), code]);
+        const user = result.rows[0];
+        if (!user) {
+            res.status(400).json({ error: 'Invalid or expired code.' });
+            return;
+        }
+        // Consume the code so it cannot be reused.
+        await db_1.pool.query(`UPDATE users SET two_factor_code = NULL, two_factor_expires = NULL WHERE id = $1`, [user.id]);
+        const token = jsonwebtoken_1.default.sign({ sub: user.id, email: user.email, role: user.role }, getJwtSecret(), { expiresIn: '24h' });
+        res.status(200).json({ token, user: { id: user.id, email: user.email, role: user.role } });
     }
-    const result = await db_1.pool.query(`SELECT id, email, role FROM users
-     WHERE email = $1
-       AND two_factor_code = $2
-       AND two_factor_expires > NOW()`, [email.toLowerCase(), code]);
-    const user = result.rows[0];
-    // Generic error: don't reveal whether code was wrong or expired.
-    if (!user) {
-        res.status(401).json({ error: 'Invalid or expired verification code.' });
-        return;
+    catch (err) {
+        console.error('[verify-2fa] Unexpected error:', err);
+        res.status(500).json({ error: 'Internal server error.' });
     }
-    // Consume the code so it cannot be reused.
-    await db_1.pool.query(`UPDATE users SET two_factor_code = NULL, two_factor_expires = NULL WHERE id = $1`, [user.id]);
-    const token = jsonwebtoken_1.default.sign({ sub: user.id, email: user.email, role: user.role }, getJwtSecret(), { expiresIn: '24h' });
-    res.status(200).json({ token });
 });
 exports.default = router;
 //# sourceMappingURL=auth.js.map
