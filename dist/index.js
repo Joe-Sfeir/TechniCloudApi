@@ -23,7 +23,24 @@ if (!process.env['MASTER_KEY']) {
 const app = (0, express_1.default)();
 const PORT = Number(process.env['PORT']) || 8080;
 // ── Middleware ────────────────────────────────────────────────────────────────
-app.use((0, cors_1.default)());
+const ALLOWED_ORIGINS = [
+    'https://technicat-website.vercel.app',
+    'http://localhost:5173',
+];
+app.use((0, cors_1.default)({
+    origin: (origin, callback) => {
+        // Allow requests with no Origin header (curl, Postman, server-to-server)
+        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+            callback(null, true);
+        }
+        else {
+            callback(new Error(`CORS: origin ${origin} not allowed`));
+        }
+    },
+    credentials: true,
+    allowedHeaders: ['Authorization', 'Content-Type'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+}));
 app.use(express_1.default.json({ limit: '1mb' }));
 // ── Routes ───────────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
@@ -42,8 +59,8 @@ app.use((err, _req, res, _next) => {
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function start() {
     await (0, db_1.initDb)();
-    const server = app.listen(PORT, () => {
-        console.log(`[server] Listening on port ${PORT}`);
+    const server = app.listen(PORT, '0.0.0.0', () => {
+        console.log(`[server] Listening on 0.0.0.0:${PORT}`);
     });
     process.on('SIGTERM', () => {
         console.log('[server] SIGTERM received — draining connections');

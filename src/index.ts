@@ -24,7 +24,24 @@ const PORT = Number(process.env['PORT']) || 8080;
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 
-app.use(cors());
+const ALLOWED_ORIGINS = [
+  'https://technicat-website.vercel.app',
+  'http://localhost:5173',
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no Origin header (curl, Postman, server-to-server)
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    }
+  },
+  credentials: true,
+  allowedHeaders: ['Authorization', 'Content-Type'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+}));
 app.use(express.json({ limit: '1mb' }));
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -51,8 +68,8 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 async function start(): Promise<void> {
   await initDb();
 
-  const server = app.listen(PORT, () => {
-    console.log(`[server] Listening on port ${PORT}`);
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[server] Listening on 0.0.0.0:${PORT}`);
   });
 
   process.on('SIGTERM', () => {
