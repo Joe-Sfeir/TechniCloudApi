@@ -167,32 +167,52 @@ router.post('/verify-2fa', async (req: Request, res: Response): Promise<void> =>
   try {
     const { email, code } = req.body as Record<string, unknown>;
 
+    console.log('Verify 2FA hit for:', email, code);
+
     if (typeof email !== 'string' || typeof code !== 'string') {
       res.status(400).json({ error: 'email and code are required.' });
       return;
     }
 
-    const result = await pool.query<{ id: number; email: string; role: string }>(
-      `SELECT id, email, role FROM users
-       WHERE email = $1
-         AND two_factor_code = $2
-         AND two_factor_expires > NOW()`,
-      [email.toLowerCase(), code],
+    // Step 1: look up user by email
+    const result = await pool.query<{
+      id: number;
+      email: string;
+      role: string;
+      two_factor_code: string | null;
+      two_factor_expires: Date | null;
+    }>(
+      `SELECT id, email, role, two_factor_code, two_factor_expires
+       FROM users WHERE email = $1`,
+      [email.toLowerCase()],
     );
 
     const user = result.rows[0];
 
     if (!user) {
-      res.status(400).json({ error: 'Invalid or expired code.' });
+      res.status(400).json({ error: 'User not found.' });
       return;
     }
 
-    // Consume the code so it cannot be reused.
+    // Step 2: check code matches
+    if (user.two_factor_code !== code) {
+      res.status(400).json({ error: 'Invalid code.' });
+      return;
+    }
+
+    // Step 3: check expiry
+    if (!user.two_factor_expires || new Date() > new Date(user.two_factor_expires)) {
+      res.status(400).json({ error: 'Code expired.' });
+      return;
+    }
+
+    // Step 4: consume the code so it cannot be reused
     await pool.query(
       `UPDATE users SET two_factor_code = NULL, two_factor_expires = NULL WHERE id = $1`,
       [user.id],
     );
 
+    // Step 5: issue JWT
     const token = jwt.sign(
       { sub: user.id, email: user.email, role: user.role },
       getJwtSecret(),
@@ -202,7 +222,7 @@ router.post('/verify-2fa', async (req: Request, res: Response): Promise<void> =>
     res.status(200).json({ token, user: { id: user.id, email: user.email, role: user.role } });
   } catch (err) {
     console.error('[verify-2fa] Unexpected error:', err);
-    res.status(500).json({ error: 'Internal server error.' });
+    res.status(500).json({ error: 'Internal server error during verification.' });
   }
 });
 
