@@ -76,12 +76,12 @@ async function pruneTier1() {
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function start() {
     await (0, db_1.initDb)();
-    // Run immediately on boot to clear backlog, then every hour
-    await pruneTier1();
-    setInterval(() => { void pruneTier1(); }, 60 * 60 * 1000);
     const server = app.listen(PORT, '0.0.0.0', () => {
         console.log(`[server] Listening on 0.0.0.0:${PORT}`);
     });
+    // Prune runs in the background — never blocks the server from accepting connections
+    void pruneTier1();
+    setInterval(() => { void pruneTier1(); }, 60 * 60 * 1000);
     process.on('SIGTERM', () => {
         console.log('[server] SIGTERM received — draining connections');
         server.close(async () => {

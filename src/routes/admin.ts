@@ -64,15 +64,78 @@ router.get('/users', async (_req: Request, res: Response): Promise<void> => {
     id: number;
     email: string;
     role: string;
+    full_name: string | null;
+    company: string | null;
     reset_requested: boolean;
     created_at: Date;
   }>(
-    `SELECT id, email, role, reset_requested, created_at
+    `SELECT id, email, role, full_name, company, reset_requested, created_at
      FROM users
      ORDER BY created_at DESC`,
   );
 
   res.status(200).json(result.rows);
+});
+
+// ── POST /api/admin/users ─────────────────────────────────────────────────────
+
+router.post('/users', async (req: Request, res: Response): Promise<void> => {
+  const { full_name, email, company, password, role } = req.body as Record<string, unknown>;
+
+  if (typeof full_name !== 'string' || full_name.trim().length === 0 || full_name.length > 255) {
+    res.status(400).json({ error: 'full_name is required and must be ≤255 characters.' });
+    return;
+  }
+
+  if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    res.status(400).json({ error: 'A valid email address is required.' });
+    return;
+  }
+
+  if (company !== undefined && (typeof company !== 'string' || company.length > 255)) {
+    res.status(400).json({ error: 'company must be a string ≤255 characters.' });
+    return;
+  }
+
+  if (typeof password !== 'string' || password.length < 8) {
+    res.status(400).json({ error: 'password must be at least 8 characters.' });
+    return;
+  }
+
+  const VALID_ROLES = ['CLIENT', 'SUB_MASTER', 'MASTER'];
+  if (typeof role !== 'string' || !VALID_ROLES.includes(role)) {
+    res.status(400).json({ error: 'role must be "CLIENT", "SUB_MASTER", or "MASTER".' });
+    return;
+  }
+
+  const normalizedEmail = email.toLowerCase();
+
+  const existing = await pool.query<{ id: number }>(
+    'SELECT id FROM users WHERE email = $1',
+    [normalizedEmail],
+  );
+  if ((existing.rowCount ?? 0) > 0) {
+    res.status(400).json({ error: 'Email already exists in the system.' });
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  const result = await pool.query<{
+    id: number;
+    email: string;
+    role: string;
+    full_name: string;
+    company: string | null;
+    created_at: Date;
+  }>(
+    `INSERT INTO users (email, password_hash, role, full_name, company)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, email, role, full_name, company, created_at`,
+    [normalizedEmail, passwordHash, role, full_name.trim(), company ?? null],
+  );
+
+  res.status(201).json(result.rows[0]);
 });
 
 // ── POST /api/admin/reset-password ───────────────────────────────────────────

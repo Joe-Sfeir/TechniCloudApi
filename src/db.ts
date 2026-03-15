@@ -38,10 +38,12 @@ export async function initDb(): Promise<void> {
     );
 
     -- Idempotent column additions — safe to run on an already-populated table
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS role             VARCHAR(20)  NOT NULL DEFAULT 'CLIENT';
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_requested  BOOLEAN      NOT NULL DEFAULT false;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_code  VARCHAR(6);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS role               VARCHAR(20)  NOT NULL DEFAULT 'CLIENT';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_requested    BOOLEAN      NOT NULL DEFAULT false;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_code    VARCHAR(6);
     ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_expires TIMESTAMPTZ;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name          VARCHAR(255);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS company            VARCHAR(255);
 
     -- ── Projects ────────────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS projects (
