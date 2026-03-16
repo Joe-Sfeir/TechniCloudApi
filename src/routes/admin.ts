@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { randomBytes, createCipheriv, createHash } from 'crypto';
+import { randomBytes, createCipheriv } from 'crypto';
 import { pool } from '../db';
 import { requireAuth, requireRole } from '../middleware/auth';
 
@@ -293,10 +293,14 @@ router.post(
       protocols,
     });
 
-    // ── Derive 32-byte AES key via SHA-256(MASTER_KEY) ────────────────────────
-    // The Rust app must apply the same derivation:
-    //   let key = Sha256::digest(master_key_bytes);
-    const aesKey = createHash('sha256').update(getMasterKey(), 'utf8').digest();
+    // ── Decode 32-byte AES key from MASTER_KEY hex string ────────────────────
+    // The Rust app does: hex_decode(MASTER_KEY_HEX) — no hashing, direct decode.
+    // MASTER_KEY must be exactly 64 hex chars (= 32 bytes for AES-256).
+    const masterKey = getMasterKey();
+    if (masterKey.length !== 64) {
+      throw new Error('CRITICAL: MASTER_KEY is missing or invalid length');
+    }
+    const aesKey = Buffer.from(masterKey, 'hex');
 
     // ── Encrypt with AES-256-GCM ──────────────────────────────────────────────
     const iv = randomBytes(12);
