@@ -13,28 +13,29 @@ router.use(express.json({ limit: '5mb' }));
 
 function getMasterKey(): string {
   const key = process.env['MASTER_KEY'];
-  if (!key) throw new Error('MASTER_KEY environment variable is required');
+  if (!key || key.length !== 64) throw new Error('CRITICAL: MASTER_KEY is missing or invalid length');
   return key;
 }
 
 interface LicensePayload {
-  user_name: string;
+  username: string;
   project_name: string;
   allowed_meters: string[];
-  tier: number | null;
+  tier: number;
   protocols: string;
   mode: string;
-  issued_at: number;
-  expires_at: number;
+  created_at: number;
+  duration_days: number;
+  ttl_hours: number;
 }
 
 /**
  * Decrypts an AES-256-GCM license blob produced by POST /api/admin/generate-license.
  * Format: base64( IV[12] | Ciphertext[n] | AuthTag[16] )
- * Key derivation: SHA-256(MASTER_KEY)
+ * Key: Buffer.from(MASTER_KEY, 'hex') — 64 hex chars = 32 bytes, no hashing.
  */
 function decryptLicense(licenseKey: string): LicensePayload {
-  const aesKey = createHash('sha256').update(getMasterKey(), 'utf8').digest();
+  const aesKey = Buffer.from(getMasterKey(), 'hex');
 
   const blob = Buffer.from(licenseKey, 'base64');
   if (blob.length < 29) throw new Error('License blob too short to be valid.');
@@ -53,6 +54,8 @@ function decryptLicense(licenseKey: string): LicensePayload {
 // ── POST /api/machine/activate ────────────────────────────────────────────────
 
 router.post('/activate', async (req: Request, res: Response): Promise<void> => {
+  console.log('[activate] Activation attempt body:', req.body);
+
   const { license_key } = req.body as Record<string, unknown>;
 
   if (typeof license_key !== 'string' || license_key.trim().length === 0) {
@@ -65,24 +68,26 @@ router.post('/activate', async (req: Request, res: Response): Promise<void> => {
   let payload: LicensePayload;
   try {
     payload = decryptLicense(license_key.trim());
-  } catch {
-    res.status(401).json({ error: 'Invalid or tampered license.' });
+  } catch (err) {
+    console.error('[activate] Decryption failed:', err);
+    res.status(401).json({ error: 'AES Decryption failed on cloud' });
     return;
   }
 
-  // Check expiry
-  if (!payload.expires_at || Math.floor(Date.now() / 1000) > payload.expires_at) {
+  // Check expiry — derived from created_at + ttl_hours (no expires_at field in payload)
+  const expiresAt = payload.created_at + Math.floor(payload.ttl_hours * 3600);
+  if (Math.floor(Date.now() / 1000) > expiresAt) {
     res.status(403).json({ error: 'License has expired.' });
     return;
   }
 
   // Validate required fields
-  if (!payload.project_name || !payload.mode) {
+  if (!payload.project_name || !payload.username || !payload.mode) {
     res.status(400).json({ error: 'License payload is missing required fields.' });
     return;
   }
 
-  const tier = payload.tier ?? 1; // offline licenses carry null tier — default to 1
+  const tier = payload.tier ?? 1;
 
   // Fingerprint prevents replay: same license blob cannot activate twice
   const fingerprint = createHash('sha256').update(license_key.trim()).digest('hex');
@@ -109,7 +114,7 @@ router.post('/activate', async (req: Request, res: Response): Promise<void> => {
       project_id:      project?.id,
       project_name:    project?.name,
       tier:            project?.tier,
-      expires_at:      payload.expires_at,
+      expires_at:      expiresAt,
     });
   } catch (err: unknown) {
     // Unique violation on license_fingerprint — this license was already activated
