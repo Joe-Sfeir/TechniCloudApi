@@ -141,42 +141,47 @@ router.post('/users', async (req: Request, res: Response): Promise<void> => {
 // ── PATCH /api/admin/projects/:projectId/assign ───────────────────────────────
 
 router.patch('/projects/:projectId/assign', async (req: Request, res: Response): Promise<void> => {
-  const projectId = Number(req.params['projectId']);
-  if (!Number.isInteger(projectId) || projectId <= 0) {
-    res.status(400).json({ error: 'projectId must be a positive integer.' });
-    return;
+  try {
+    const projectId = Number(req.params['projectId']);
+    if (!Number.isInteger(projectId) || projectId <= 0) {
+      res.status(400).json({ error: 'projectId must be a positive integer.' });
+      return;
+    }
+
+    const { user_id } = req.body as Record<string, unknown>;
+
+    if (typeof user_id !== 'number' && typeof user_id !== 'string') {
+      res.status(400).json({ error: 'user_id is required.' });
+      return;
+    }
+
+    const targetUserId = Number(user_id);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      res.status(400).json({ error: 'user_id must be a positive integer.' });
+      return;
+    }
+
+    const result = await pool.query<{
+      id: number;
+      name: string;
+      user_id: number;
+      tier: number | null;
+      created_at: Date;
+    }>(
+      `UPDATE projects SET user_id = $1 WHERE id = $2 RETURNING *`,
+      [targetUserId, projectId],
+    );
+
+    if ((result.rowCount ?? 0) === 0) {
+      res.status(404).json({ error: 'Project not found.' });
+      return;
+    }
+
+    res.status(200).json({ message: 'Project assigned successfully.', project: result.rows[0] });
+  } catch (err) {
+    console.error('[admin] PATCH /projects/:projectId/assign error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
   }
-
-  const { user_id } = req.body as Record<string, unknown>;
-
-  if (typeof user_id !== 'number' && typeof user_id !== 'string') {
-    res.status(400).json({ error: 'user_id is required.' });
-    return;
-  }
-
-  const targetUserId = Number(user_id);
-  if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
-    res.status(400).json({ error: 'user_id must be a positive integer.' });
-    return;
-  }
-
-  const result = await pool.query<{
-    id: number;
-    name: string;
-    user_id: number;
-    tier: number | null;
-    created_at: Date;
-  }>(
-    `UPDATE projects SET user_id = $1 WHERE id = $2 RETURNING *`,
-    [targetUserId, projectId],
-  );
-
-  if ((result.rowCount ?? 0) === 0) {
-    res.status(404).json({ error: 'Project not found.' });
-    return;
-  }
-
-  res.status(200).json({ message: 'Project assigned successfully.', project: result.rows[0] });
 });
 
 // ── POST /api/admin/reset-password ───────────────────────────────────────────
@@ -277,14 +282,15 @@ router.post(
     // ── Build plaintext payload ───────────────────────────────────────────────
     const nowSec = Math.floor(Date.now() / 1000);
     const plaintext = JSON.stringify({
-      user_name:      user_name.trim(),
+      created_at:     nowSec,
+      duration_days:  ttl_hours / 24,
+      ttl_hours,
+      username:       user_name.trim(),
       project_name:   project_name.trim(),
       allowed_meters,
-      tier:           resolvedTier,
-      protocols,
       mode,
-      issued_at:      nowSec,
-      expires_at:     nowSec + Math.floor(ttl_hours * 3600),
+      tier:           resolvedTier ?? 0,
+      protocols,
     });
 
     // ── Derive 32-byte AES key via SHA-256(MASTER_KEY) ────────────────────────
