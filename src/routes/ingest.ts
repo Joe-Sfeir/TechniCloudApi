@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import type { QueryResult } from 'pg';
 import { pool } from '../db';
 import { requireAuth } from '../middleware/auth';
 
@@ -129,7 +130,7 @@ router.get('/telemetry/:projectId', requireAuth, async (req: Request, res: Respo
 
   const since = req.query['since'] as string | undefined;
 
-  let result: Awaited<ReturnType<typeof pool.query<{ device_name: string; timestamp: Date; data: Record<string, unknown> }>>>;
+  let result: QueryResult<{ device_name: string; timestamp: Date; data: Record<string, unknown> }>;
 
   if (since) {
     const parsedSince = new Date(since);
