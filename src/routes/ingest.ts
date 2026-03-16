@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { pool } from '../db';
+import { requireAuth } from '../middleware/auth';
 
 const router = Router();
 
@@ -92,6 +93,84 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
   );
 
   res.status(200).json({ success: true, message: 'Telemetry ingested.' });
+});
+
+// ── GET /api/telemetry/:projectId ─────────────────────────────────────────────
+//
+// Website-facing route — requires JWT.
+// Returns the last 120 rows on initial load, or rows after `?since=<ISO>` for
+// incremental polling. Each row flattens the JSONB `data` field so the frontend
+// receives { timestamp, device_name, "Voltage L1": 230.5, ... } directly.
+
+router.get('/telemetry/:projectId', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  const projectId = Number(req.params['projectId']);
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    res.status(400).json({ error: 'projectId must be a positive integer.' });
+    return;
+  }
+
+  const userId = res.locals['userId'] as number;
+  const role   = res.locals['role']   as string;
+
+  // Access control — MASTER/SUB_MASTER see all; CLIENT only their own projects
+  const projectResult = await pool.query<{ id: number; name: string; user_id: number | null }>(
+    'SELECT id, name, user_id FROM projects WHERE id = $1',
+    [projectId],
+  );
+  const project = projectResult.rows[0];
+  if (!project) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
+  if (role === 'CLIENT' && project.user_id !== userId) {
+    res.status(403).json({ error: 'Forbidden.' });
+    return;
+  }
+
+  const since = req.query['since'] as string | undefined;
+
+  let result: Awaited<ReturnType<typeof pool.query<{ device_name: string; timestamp: Date; data: Record<string, unknown> }>>>;
+
+  if (since) {
+    const parsedSince = new Date(since);
+    if (isNaN(parsedSince.getTime())) {
+      res.status(400).json({ error: 'Invalid since parameter — must be an ISO 8601 date string.' });
+      return;
+    }
+    result = await pool.query(
+      `SELECT device_name, timestamp, data
+       FROM telemetry
+       WHERE project_id = $1 AND timestamp > $2
+       ORDER BY timestamp ASC
+       LIMIT 500`,
+      [projectId, parsedSince],
+    );
+  } else {
+    // Initial load — fetch the most recent 120 rows then re-sort ascending
+    // so the chart renders left-to-right chronologically.
+    result = await pool.query(
+      `SELECT device_name, timestamp, data
+       FROM (
+         SELECT device_name, timestamp, data
+         FROM telemetry
+         WHERE project_id = $1
+         ORDER BY timestamp DESC
+         LIMIT 120
+       ) sub
+       ORDER BY timestamp ASC`,
+      [projectId],
+    );
+  }
+
+  // Flatten JSONB data fields into each row so the frontend receives
+  // { timestamp, device_name, "Voltage L1": 230.5, ... }
+  const rows = result.rows.map((r) => ({
+    timestamp:   new Date(r.timestamp).toISOString(),
+    device_name: r.device_name,
+    ...(r.data as Record<string, unknown>),
+  }));
+
+  res.status(200).json({ project_name: project.name, rows });
 });
 
 export default router;
