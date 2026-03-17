@@ -21,13 +21,13 @@ router.get('/', async (_req: Request, res: Response): Promise<void> => {
     api_key_prefix: string;
     created_at: Date;
   }>(
-    `SELECT id, name, tier,
-            -- Only expose a masked prefix; the full key was shown once at creation
-            CONCAT(SUBSTRING(api_key, 1, 10), '...') AS api_key_prefix,
-            created_at
-     FROM projects
-     WHERE user_id = $1
-     ORDER BY created_at DESC`,
+    `SELECT p.id, p.name, p.tier,
+            CONCAT(SUBSTRING(p.api_key, 1, 10), '...') AS api_key_prefix,
+            p.created_at
+     FROM projects p
+     JOIN project_assignments pa ON pa.project_id = p.id
+     WHERE pa.user_id = $1
+     ORDER BY p.created_at DESC`,
     [userId],
   );
 

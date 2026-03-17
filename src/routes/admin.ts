@@ -29,16 +29,21 @@ router.get('/projects', async (_req: Request, res: Response): Promise<void> => {
     name: string;
     tier: number;
     created_at: Date;
-    client: string;
+    clients: { id: number; email: string }[];
     last_seen: Date | null;
   }>(
     `SELECT p.id, p.user_id, p.name, p.tier, p.created_at,
-            COALESCE(u.email, '(unassigned)') AS client,
+            COALESCE(
+              json_agg(json_build_object('id', u.id, 'email', u.email) ORDER BY pa.assigned_at)
+              FILTER (WHERE pa.id IS NOT NULL),
+              '[]'::json
+            ) AS clients,
             MAX(t.timestamp) AS last_seen
      FROM projects p
-     LEFT JOIN users u ON u.id = p.user_id
+     LEFT JOIN project_assignments pa ON pa.project_id = p.id
+     LEFT JOIN users u ON u.id = pa.user_id
      LEFT JOIN telemetry t ON t.project_id = p.id
-     GROUP BY p.id, p.user_id, u.email
+     GROUP BY p.id
      ORDER BY p.created_at DESC`,
   );
 
@@ -76,6 +81,35 @@ router.get('/users', async (_req: Request, res: Response): Promise<void> => {
   );
 
   res.status(200).json(result.rows);
+});
+
+// ── DELETE /api/admin/users/:userId ──────────────────────────────────────────
+
+router.delete('/users/:userId', async (req: Request, res: Response): Promise<void> => {
+  const userId = Number(req.params['userId']);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    res.status(400).json({ error: 'userId must be a positive integer.' });
+    return;
+  }
+
+  const check = await pool.query<{ id: number; role: string }>(
+    'SELECT id, role FROM users WHERE id = $1',
+    [userId],
+  );
+
+  if ((check.rowCount ?? 0) === 0) {
+    res.status(404).json({ error: 'User not found.' });
+    return;
+  }
+
+  if (check.rows[0]?.role === 'MASTER') {
+    res.status(403).json({ error: 'Cannot delete master account.' });
+    return;
+  }
+
+  await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+
+  res.status(200).json({ message: 'User deleted.' });
 });
 
 // ── POST /api/admin/users ─────────────────────────────────────────────────────
@@ -162,6 +196,15 @@ router.patch('/projects/:projectId/assign', async (req: Request, res: Response):
       return;
     }
 
+    const projectCheck = await pool.query<{ id: number }>(
+      'SELECT id FROM projects WHERE id = $1',
+      [projectId],
+    );
+    if ((projectCheck.rowCount ?? 0) === 0) {
+      res.status(404).json({ error: 'Project not found.' });
+      return;
+    }
+
     const userCheck = await pool.query<{ id: number }>(
       'SELECT id FROM users WHERE id = $1',
       [targetUserId],
@@ -171,14 +214,20 @@ router.patch('/projects/:projectId/assign', async (req: Request, res: Response):
       return;
     }
 
-    const updateResult = await pool.query(
-      `UPDATE projects SET user_id = $1 WHERE id = $2`,
-      [targetUserId, projectId],
-    );
-
-    if ((updateResult.rowCount ?? 0) === 0) {
-      res.status(404).json({ error: 'Project not found.' });
-      return;
+    try {
+      await pool.query(
+        `INSERT INTO project_assignments (project_id, user_id) VALUES ($1, $2)`,
+        [projectId, targetUserId],
+      );
+    } catch (insertErr: unknown) {
+      if (
+        typeof insertErr === 'object' && insertErr !== null &&
+        'code' in insertErr && (insertErr as Record<string, unknown>)['code'] === '23505'
+      ) {
+        res.status(400).json({ error: 'Client already assigned to this project.' });
+        return;
+      }
+      throw insertErr;
     }
 
     const result = await pool.query<{
@@ -187,25 +236,75 @@ router.patch('/projects/:projectId/assign', async (req: Request, res: Response):
       name: string;
       tier: number;
       created_at: Date;
-      owner_email: string;
+      clients: { id: number; email: string }[];
       last_seen: Date | null;
     }>(
       `SELECT p.id, p.user_id, p.name, p.tier, p.created_at,
-              COALESCE(u.email, '(unassigned)') AS owner_email,
+              COALESCE(
+                json_agg(json_build_object('id', u.id, 'email', u.email) ORDER BY pa.assigned_at)
+                FILTER (WHERE pa.id IS NOT NULL),
+                '[]'::json
+              ) AS clients,
               MAX(t.timestamp) AS last_seen
        FROM projects p
-       LEFT JOIN users u ON u.id = p.user_id
+       LEFT JOIN project_assignments pa ON pa.project_id = p.id
+       LEFT JOIN users u ON u.id = pa.user_id
        LEFT JOIN telemetry t ON t.project_id = p.id
        WHERE p.id = $1
-       GROUP BY p.id, p.user_id, u.email`,
+       GROUP BY p.id`,
       [projectId],
     );
 
-    res.status(200).json({ message: 'Project assigned successfully.', project: result.rows[0] });
+    const row = result.rows[0];
+    let status: 'ONLINE' | 'OFFLINE' | 'NEVER';
+    if (!row?.last_seen) {
+      status = 'NEVER';
+    } else if (Date.now() - new Date(row.last_seen).getTime() <= ONLINE_WINDOW_MS) {
+      status = 'ONLINE';
+    } else {
+      status = 'OFFLINE';
+    }
+
+    res.status(200).json({ message: 'Project assigned successfully.', project: { ...row, status } });
   } catch (err) {
     console.error('[admin] PATCH /projects/:projectId/assign error:', err);
     res.status(500).json({ error: 'Internal server error.' });
   }
+});
+
+// ── DELETE /api/admin/projects/:projectId/unassign ────────────────────────────
+
+router.delete('/projects/:projectId/unassign', async (req: Request, res: Response): Promise<void> => {
+  const projectId = Number(req.params['projectId']);
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    res.status(400).json({ error: 'projectId must be a positive integer.' });
+    return;
+  }
+
+  const { user_id } = req.body as Record<string, unknown>;
+
+  if (typeof user_id !== 'number' && typeof user_id !== 'string') {
+    res.status(400).json({ error: 'user_id is required.' });
+    return;
+  }
+
+  const targetUserId = Number(user_id);
+  if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+    res.status(400).json({ error: 'user_id must be a positive integer.' });
+    return;
+  }
+
+  const result = await pool.query(
+    `DELETE FROM project_assignments WHERE project_id = $1 AND user_id = $2`,
+    [projectId, targetUserId],
+  );
+
+  if ((result.rowCount ?? 0) === 0) {
+    res.status(404).json({ error: 'Assignment not found.' });
+    return;
+  }
+
+  res.status(200).json({ message: 'Client unassigned.' });
 });
 
 // ── POST /api/admin/reset-password ───────────────────────────────────────────
@@ -338,8 +437,50 @@ router.post(
     // ── Encode as base64( IV[12] | Ciphertext[n] | AuthTag[16] ) ─────────────
     const licenseKey = Buffer.concat([iv, ciphertext, authTag]).toString('base64');
 
+    // ── Record to license history ─────────────────────────────────────────────
+    const generatedBy = res.locals['userId'] as number;
+    await pool.query(
+      `INSERT INTO license_history
+         (generated_by, username, project_name, mode, tier, protocols, allowed_meters, ttl_hours)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        generatedBy,
+        user_name.trim(),
+        project_name.trim(),
+        mode,
+        resolvedTier,
+        protocols,
+        JSON.stringify(allowed_meters),
+        ttl_hours,
+      ],
+    );
+
     res.status(201).json({ license_key: licenseKey });
   },
 );
+
+// ── GET /api/admin/licenses ───────────────────────────────────────────────────
+
+router.get('/licenses', async (_req: Request, res: Response): Promise<void> => {
+  const result = await pool.query<{
+    id: number;
+    generated_by: number | null;
+    username: string;
+    project_name: string;
+    mode: string;
+    tier: number | null;
+    protocols: string | null;
+    allowed_meters: unknown[];
+    ttl_hours: number | null;
+    created_at: Date;
+  }>(
+    `SELECT id, generated_by, username, project_name, mode, tier,
+            protocols, allowed_meters, ttl_hours, created_at
+     FROM license_history
+     ORDER BY created_at DESC`,
+  );
+
+  res.status(200).json(result.rows);
+});
 
 export default router;

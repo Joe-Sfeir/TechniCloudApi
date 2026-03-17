@@ -79,6 +79,35 @@ export async function initDb(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_telemetry_project_timestamp
       ON telemetry (project_id, timestamp DESC);
+
+    -- ── Project Assignments ──────────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS project_assignments (
+      id          BIGSERIAL   PRIMARY KEY,
+      project_id  BIGINT      NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id     BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(project_id, user_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_project_assignments_project_id
+      ON project_assignments (project_id);
+
+    CREATE INDEX IF NOT EXISTS idx_project_assignments_user_id
+      ON project_assignments (user_id);
+
+    -- ── License History ──────────────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS license_history (
+      id             BIGSERIAL    PRIMARY KEY,
+      generated_by   BIGINT       REFERENCES users(id),
+      username       VARCHAR(255) NOT NULL,
+      project_name   VARCHAR(255) NOT NULL,
+      mode           VARCHAR(20)  NOT NULL,
+      tier           INT,
+      protocols      VARCHAR(20),
+      allowed_meters JSONB,
+      ttl_hours      INT,
+      created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    );
   `);
 
   // Promote the master account if it exists and hasn't been promoted yet.
