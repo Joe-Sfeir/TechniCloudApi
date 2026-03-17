@@ -74,9 +74,11 @@ router.get('/users', async (_req: Request, res: Response): Promise<void> => {
     company: string | null;
     reset_requested: boolean;
     created_at: Date;
+    project_count: number;
   }>(
-    `SELECT id, email, role, full_name, company, reset_requested, created_at
-     FROM users
+    `SELECT id, email, role, full_name, company, reset_requested, created_at,
+            (SELECT COUNT(*) FROM project_assignments pa WHERE pa.user_id = u.id)::int AS project_count
+     FROM users u
      ORDER BY created_at DESC`,
   );
 
