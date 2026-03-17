@@ -1,0 +1,499 @@
+================================================================================
+TECHNIDAQ CLOUD API — ARCHITECTURE SNAPSHOT
+Generated: 2026-03-17
+================================================================================
+
+DIRECTORY TREE
+--------------
+/c/Users/Joe/Desktop/technidaq-cloud-api
+├── .claude/
+│   └── settings.local.json
+├── .env
+├── CLAUDE.md
+├── package.json
+├── package-lock.json
+├── tsconfig.json
+└── src/
+    ├── db.ts
+    ├── index.ts
+    ├── middleware/
+    │   └── auth.ts
+    └── routes/
+        ├── admin.ts
+        ├── auth.ts
+        ├── export.ts
+        ├── ingest.ts
+        ├── machine.ts
+        └── projects.ts
+
+================================================================================
+FILE SUMMARIES
+================================================================================
+
+--- src/index.ts ---
+Exports: (none — entry point)
+Imports (local):
+  ./db                  → initDb, pool
+  ./routes/auth         → authRouter
+  ./routes/projects     → projectsRouter
+  ./routes/ingest       → ingestRouter
+  ./routes/admin        → adminRouter
+  ./routes/machine      → machineRouter
+  ./routes/export       → exportRouter
+
+Startup guards:
+  Throws if JWT_SECRET env var is missing
+  Throws if MASTER_KEY env var is missing
+
+Server:
+  PORT: process.env.PORT || 8080
+  Binds to: 0.0.0.0
+
+Middleware stack:
+  cors (dynamic origin whitelist) → express.json({ limit: '1mb' }) → routes → global error handler
+
+CORS configuration:
+  Allowed origins (pattern match):
+    - http://localhost:5173  (exact)
+    - *.vercel.app           (suffix)
+    - *.technicatgroup.com   (suffix)
+  credentials: true
+  allowedHeaders: Authorization, Content-Type, x-api-key
+  methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
+
+Routes mounted:
+  GET  /health          → inline handler (liveness/readiness probe, no auth)
+  /api/auth             → authRouter
+  /api/projects         → projectsRouter
+  /api/admin            → adminRouter
+  /api/export           → exportRouter
+  /api/machine          → machineRouter  (carries its own express.json({ limit: '5mb' }))
+  /api                  → ingestRouter
+
+Global error handler: yes — 4-arg Express 5 signature; logs to console, returns 500 JSON
+
+Background tasks:
+  pruneTier1() — deletes telemetry rows older than 2 days for tier-1 projects
+    - Runs once immediately on startup (non-blocking, void)
+    - Repeats every 60 minutes via setInterval
+
+SIGTERM handler:
+  server.close() → pool.end() → process.exit(0)
+  Gracefully drains HTTP connections before shutting down the DB pool
+
+Bootstrap sequence:
+  initDb() → app.listen() → void pruneTier1() + setInterval
+
+
+--- src/db.ts ---
+Exports:
+  pool      (pg.Pool instance)
+  initDb()  (async function → Promise<void>)
+
+Pool configuration:
+  connectionString: process.env.DATABASE_URL  (required; throws if absent)
+  max: 10 connections
+  idleTimeoutMillis: 30,000
+  connectionTimeoutMillis: 5,000
+  ssl: { rejectUnauthorized: false }  (production only, for Cloud SQL Auth Proxy)
+
+Tables initialized (idempotent — CREATE TABLE IF NOT EXISTS):
+
+  users
+    id                BIGSERIAL    PRIMARY KEY
+    email             VARCHAR(255) UNIQUE NOT NULL
+    password_hash     TEXT         NOT NULL
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    role              VARCHAR(20)  NOT NULL DEFAULT 'CLIENT'       (ALTER ADD COLUMN IF NOT EXISTS)
+    reset_requested   BOOLEAN      NOT NULL DEFAULT false          (ALTER ADD COLUMN IF NOT EXISTS)
+    two_factor_code   VARCHAR(6)                                   (ALTER ADD COLUMN IF NOT EXISTS)
+    two_factor_expires TIMESTAMPTZ                                 (ALTER ADD COLUMN IF NOT EXISTS)
+    full_name         VARCHAR(255)                                 (ALTER ADD COLUMN IF NOT EXISTS)
+    company           VARCHAR(255)                                 (ALTER ADD COLUMN IF NOT EXISTS)
+
+  projects
+    id                BIGSERIAL    PRIMARY KEY
+    user_id           BIGINT       REFERENCES users(id) ON DELETE CASCADE  (nullable — machine-activated)
+    name              VARCHAR(255) NOT NULL
+    tier              INT          NOT NULL DEFAULT 1
+    api_key           VARCHAR(255) UNIQUE NOT NULL
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    license_fingerprint VARCHAR(64) UNIQUE                         (ALTER ADD COLUMN IF NOT EXISTS)
+
+  telemetry
+    id                BIGSERIAL    PRIMARY KEY
+    project_id        BIGINT       NOT NULL REFERENCES projects(id) ON DELETE CASCADE
+    device_name       VARCHAR(255) NOT NULL
+    timestamp         TIMESTAMPTZ  NOT NULL
+    data              JSONB        NOT NULL
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+
+Indexes:
+  idx_projects_user_id               ON projects (user_id)
+  idx_projects_api_key               ON projects (api_key)
+  idx_telemetry_project_timestamp    ON telemetry (project_id, timestamp DESC)  — composite; optimises per-tenant time-range queries
+
+Post-schema step:
+  If MASTER_EMAIL env var is set, promotes that user to role='MASTER' (idempotent UPDATE)
+
+
+--- src/middleware/auth.ts ---
+Exports:
+  JwtPayload         (interface: { sub: number; email: string; role: string })
+  requireAuth        (Express middleware)
+  requireRole        (middleware factory — accepts ...roles: string[])
+
+requireAuth behaviour:
+  - Reads Authorization: Bearer <token> header
+  - Verifies JWT using JWT_SECRET env var
+  - On success: attaches res.locals['userId'] = payload.sub (number)
+                           res.locals['role']   = payload.role (string)
+  - On missing/invalid header or bad token: 401 Unauthorized
+
+requireRole(...roles) behaviour:
+  - Must be used after requireAuth
+  - Reads res.locals['role']
+  - If role is not in the provided list: 403 Forbidden
+  - Otherwise: calls next()
+
+Attaches to res.locals:
+  userId  (number)
+  role    (string)
+
+
+--- src/routes/auth.ts ---
+Exports: default router
+Imports (local):
+  ../db → pool
+
+Auth: none — all endpoints are public
+
+Endpoints:
+
+  POST /api/auth/register
+    Body: { email: string, password: string }
+    - Validates email format; rejects passwords < 8 chars
+    - Normalises email to lowercase
+    - Checks for duplicate email (409 if exists)
+    - Assigns role='MASTER' if email matches MASTER_EMAIL env var, else 'CLIENT'
+    - bcrypt.hash(password, 12)
+    - Returns 201: { id, email, role, created_at }
+
+  POST /api/auth/login
+    Body: { email: string, password: string }
+    - Timing-safe: always runs bcrypt.compare (dummy hash if user not found)
+    - CLIENT role: issues JWT (24h expiry) immediately
+      Returns 200: { token, user: { id, email, role } }
+    - MASTER / SUB_MASTER role: triggers 2FA challenge
+      Generates 6-digit cryptographically secure code (crypto.randomInt)
+      Stores code + 10-minute expiry in users table
+      Sends code via SMTP (Gmail) if SMTP_USER+SMTP_PASS env vars set; else logs to console
+      Returns 200: { requires_2fa: true, email }
+
+  POST /api/auth/verify-2fa
+    Body: { email: string, code: string }
+    - Looks up user by email
+    - Validates code match and expiry (10-minute window)
+    - Consumes code (sets two_factor_code=NULL, two_factor_expires=NULL)
+    - Issues JWT (24h expiry)
+    - Returns 200: { token, user: { id, email, role } }
+
+Helper: sendTwoFactorEmail(to, code)
+  - Uses nodemailer with Gmail SMTP
+  - family:4 forces IPv4 (avoids ENETUNREACH on IPv6 nodes)
+  - connectionTimeout/greetingTimeout: 5,000ms each
+  - Fire-and-forget (background, does not block response)
+  - Falls back to console.log if SMTP env vars absent
+
+JWT payload shape: { sub: userId, email, role }  — signed with JWT_SECRET, expiresIn: '24h'
+
+
+--- src/routes/admin.ts ---
+Exports: default router
+Imports (local):
+  ../db                 → pool
+  ../middleware/auth    → requireAuth, requireRole
+
+Auth: requireAuth + requireRole('MASTER', 'SUB_MASTER') applied at router level (all endpoints)
+
+Endpoints:
+
+  GET /api/admin/projects
+    Auth: MASTER or SUB_MASTER
+    - JOINs projects → users (owner email) → telemetry (last seen timestamp)
+    - Computes online status per project:
+        ONLINE  — last telemetry within 5 minutes
+        OFFLINE — last telemetry older than 5 minutes
+        NEVER   — no telemetry rows
+    - Returns 200: array of { id, name, tier, created_at, owner_email, last_seen, status }
+
+  GET /api/admin/users
+    Auth: MASTER or SUB_MASTER
+    - Returns all users ordered by created_at DESC
+    - Returns 200: array of { id, email, role, full_name, company, reset_requested, created_at }
+
+  POST /api/admin/users
+    Auth: MASTER or SUB_MASTER
+    Body: { full_name, email, company?, password, role }
+    - Validates: full_name (required, ≤255), email (format), company (optional, ≤255),
+                 password (≥8 chars), role (must be 'CLIENT'|'SUB_MASTER'|'MASTER')
+    - Checks for duplicate email (400 if exists)
+    - bcrypt.hash(password, 12)
+    - Returns 201: { id, email, role, full_name, company, created_at }
+
+  PATCH /api/admin/projects/:projectId/assign
+    Auth: MASTER or SUB_MASTER
+    Body: { user_id: number }
+    - Sets projects.user_id = user_id for the given project
+    - Used to assign machine-activated (user_id=NULL) projects to a user account
+    - Returns 200: { message, project } or 404 if project not found
+
+  POST /api/admin/reset-password
+    Auth: MASTER or SUB_MASTER
+    Body: { user_id: number }
+    - Verifies target user exists (404 if not)
+    - Generates 8-char base64url temp password (~48 bits entropy) via randomBytes(6)
+    - Hashes with bcrypt(12), sets reset_requested=false
+    - Returns 200: { user_id, temp_password }  (plaintext shown once — admin reads to client)
+
+  POST /api/admin/generate-license
+    Auth: MASTER ONLY (additional requireRole('MASTER') on this handler)
+    Body: { user_name, project_name, allowed_meters[], tier (1|2, online only), protocols ('RTU'|'TCP'|'All'), mode ('online'|'offline'), ttl_hours }
+    - Validates all fields; offline mode forces tier=null (0 in payload)
+    - Builds JSON plaintext payload: { created_at (epoch), duration_days, ttl_hours, username, project_name, allowed_meters, mode, tier, protocols }
+    - Derives AES-256 key: Buffer.from(MASTER_KEY, 'hex') — MASTER_KEY must be exactly 64 hex chars
+    - Encrypts with AES-256-GCM (12-byte random IV, 16-byte auth tag)
+    - Output format: base64( IV[12] | Ciphertext[n] | AuthTag[16] )
+    - Returns 201: { license_key }
+
+
+--- src/routes/projects.ts ---
+Exports: default router
+Imports (local):
+  ../db                 → pool
+  ../middleware/auth    → requireAuth
+
+Auth: requireAuth applied at router level (all endpoints)
+
+Endpoints:
+
+  GET /api/projects
+    Auth: any authenticated user
+    - Returns caller's own projects (WHERE user_id = res.locals.userId)
+    - api_key is masked: only first 10 chars + '...' exposed (api_key_prefix)
+    - Returns 200: array of { id, name, tier, api_key_prefix, created_at }
+
+  POST /api/projects
+    Auth: any authenticated user
+    Body: { name: string, tier?: 1|2|3 }
+    - Validates: name (required, ≤255), tier (1|2|3, defaults to 1)
+    - Generates api_key: 'TDAQ-' + randomBytes(20).toString('hex')  (160 bits entropy)
+    - api_key returned in full here only — not shown again after creation
+    - Returns 201: { id, user_id, name, tier, api_key, created_at }
+
+
+--- src/routes/ingest.ts ---
+Exports: default router
+Imports (local):
+  ../db                 → pool
+  ../middleware/auth    → requireAuth
+
+Endpoints:
+
+  POST /api/ingest
+    Auth: NONE — machine-facing; authenticated via api_key in body or x-api-key header
+    Body: { api_key?: string, device_name: string, timestamp: string (ISO 8601), data: object }
+    - api_key fallback: if not in body, reads x-api-key header (for constrained devices e.g. ESP32)
+    - Validates payload shape via validatePayload()
+    - Validates timestamp is a valid ISO 8601 date
+    - Resolves api_key → project_id; 401 if not found
+    - INSERTs one telemetry row
+    - Returns 200: { success: true, message: 'Telemetry ingested.' }
+
+  GET /api/telemetry/:projectId
+    Auth: requireAuth (JWT)
+    Query params: ?since=<ISO 8601>  (optional)
+    - Access control: MASTER/SUB_MASTER can read any project; CLIENT only their own (403 otherwise)
+    - Without ?since: returns last 120 rows (DESC LIMIT 120), re-sorted ASC for charting
+    - With ?since: returns rows after that timestamp, ORDER BY timestamp ASC, LIMIT 500
+    - Flattens JSONB data field into each response row:
+        { timestamp (ISO string), device_name, ...data fields }
+    - Returns 200: { project_name, rows: FlatRow[] }
+
+
+--- src/routes/machine.ts ---
+Exports: default router
+Imports (local):
+  ../db → pool
+
+Note: Mounts express.json({ limit: '5mb' }) at router level (overrides global 1mb limit for batch ingest)
+
+Auth: NONE on both endpoints — authenticated via encrypted license_key (activate) or x-api-key header (ingest)
+
+Endpoints:
+
+  POST /api/machine/activate
+    Auth: NONE — authenticated by AES-256-GCM-encrypted license blob
+    Body: { license_key: string }
+    - Decrypts license_key with decryptLicense():
+        AES key: Buffer.from(MASTER_KEY, 'hex')  (64 hex chars = 32 bytes)
+        Blob format: base64( IV[12] | Ciphertext[n] | AuthTag[16] )
+        GCM auth tag verification provides tamper-proof integrity
+    - Validates expiry: created_at + ttl_hours*3600 > now (epoch seconds)
+    - Validates required payload fields: project_name, username, mode
+    - Computes fingerprint: SHA-256(license_key) — prevents replay (same blob activating twice)
+    - Generates machine_api_key: 'TDAQ-MAC-' + randomBytes(20).toString('hex')
+    - INSERTs into projects with user_id=NULL (unassigned until admin assigns it)
+    - On unique constraint violation (code 23505 on license_fingerprint): 409 Already Activated
+    - Returns 201: { machine_api_key, project_id, project_name, tier, expires_at }
+
+  POST /api/machine/ingest
+    Auth: NONE — authenticated via x-api-key header (machine_api_key from activation)
+    Body: { telemetry_array: TelemetryRow[] }
+    TelemetryRow shape: { device_name: string, timestamp: string (ISO 8601), data: object }
+    - Resolves x-api-key → project_id; 401 if not found
+    - Max batch size: 500 rows (400 if exceeded)
+    - Validates every row before any DB write (all-or-nothing)
+    - Single bulk INSERT via jsonb_array_elements($2::jsonb) — one DB round-trip
+    - Returns 200: { success: true, inserted: number }
+
+
+--- src/routes/export.ts ---
+Exports: default router
+Imports (local):
+  ../db                 → pool
+  ../middleware/auth    → requireAuth, requireRole
+
+Auth: requireAuth applied at router level
+
+Endpoints:
+
+  GET /api/export/:projectId
+    Auth: requireAuth  (role-based access check inline — no requireRole at router level)
+    - MASTER/SUB_MASTER can export any project; CLIENT only their own (403 otherwise)
+    - Fetches all telemetry for the project ordered by device_name ASC, timestamp ASC
+    - 404 if project not found or no telemetry rows
+    - Groups rows by device_name
+    - Builds a multi-sheet Excel workbook (ExcelJS) — one sheet per device:
+        Rows 1–4: corporate header (Company, Project, Device, Exported date)
+        Row 5:    empty separator
+        Row 6:    column headers (Timestamp + dynamic data keys), styled dark blue background
+        Row 7+:   data rows with formatted timestamps
+        Sheet name truncated to 31 chars (Excel limit)
+        Column widths: Timestamp=22, data cols=18
+        Sheet protected with password 'TDAQ_Secure_2026!' (read-only, cells selectable)
+    - Streams response:
+        Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+        Content-Disposition: attachment; filename="TDAQ_Project{id}_{yyyy-MM-dd}.xlsx"
+    - Returns binary .xlsx stream
+
+
+--- package.json ---
+name:     technidaq-cloud-api
+version:  1.0.0
+main:     dist/index.js
+
+Scripts:
+  build   — tsc
+  start   — node dist/index.js
+  dev     — ts-node src/index.ts
+
+Runtime dependencies:
+  bcryptjs     ^3.0.3   — password hashing
+  cors         ^2.8.6   — CORS middleware
+  date-fns     ^4.1.0   — date formatting for Excel export
+  dotenv       ^17.3.1  — env var loading
+  exceljs      ^4.4.0   — Excel workbook generation
+  express      ^5.2.1   — HTTP framework (Express 5)
+  jsonwebtoken ^9.0.3   — JWT sign/verify
+  nodemailer   ^8.0.2   — SMTP email (2FA codes)
+  pg           ^8.20.0  — PostgreSQL client
+
+Dev dependencies:
+  @types/bcryptjs      ^2.4.6
+  @types/cors          ^2.8.19
+  @types/express       ^5.0.6
+  @types/jsonwebtoken  ^9.0.10
+  @types/node          ^25.5.0
+  @types/nodemailer    ^7.0.11
+  @types/pg            ^8.18.0
+  ts-node              ^10.9.2
+  typescript           ^5.9.3
+
+
+--- tsconfig.json ---
+rootDir:   ./src
+outDir:    ./dist
+
+Key compiler options:
+  module:                  commonjs
+  moduleResolution:        node
+  target:                  esnext
+  lib:                     [esnext]
+  types:                   [node]
+  sourceMap:               true
+  declaration:             true
+  declarationMap:          true
+  strict:                  true
+  noUncheckedIndexedAccess: true   — index access returns T | undefined
+  exactOptionalPropertyTypes: true — optional props cannot be assigned undefined explicitly
+  esModuleInterop:         true
+  allowSyntheticDefaultImports: true
+  isolatedModules:         true
+  moduleDetection:         force
+  skipLibCheck:            true
+
+include: src/**/*
+exclude: node_modules, dist
+
+
+================================================================================
+ROLE SYSTEM SUMMARY
+================================================================================
+
+Role          Access level
+-----------   ----------------------------------------------------------------
+CLIENT        Self-service: own projects (read/create), own telemetry, own export
+SUB_MASTER    Admin panel: all projects, all users, create users, assign projects,
+              reset passwords, export any project, read any telemetry
+MASTER        Everything SUB_MASTER can do + generate license keys
+              (MASTER is also the only role that can be set via MASTER_EMAIL env)
+
+2FA is enforced for MASTER and SUB_MASTER logins only.
+CLIENT logins receive a JWT immediately after password check.
+
+
+================================================================================
+REQUEST LIFECYCLE (per route category)
+================================================================================
+
+Edge/machine (no user session):
+  POST /api/machine/activate  — license blob verified server-side via AES-256-GCM
+  POST /api/machine/ingest    — x-api-key header → project lookup
+  POST /api/ingest            — api_key in body or x-api-key header → project lookup
+
+Browser/dashboard (JWT session):
+  cors → express.json → requireAuth (JWT verify) → [requireRole] → handler → DB → response
+
+Error propagation:
+  Express 5 auto-propagates async errors to the global 4-arg error handler.
+  Global handler: logs to console, returns 500 { error: 'Internal server error.' }
+  Some handlers have local try/catch for specific error codes (e.g. 23505 unique violation).
+
+
+================================================================================
+ENVIRONMENT VARIABLES
+================================================================================
+
+Required at startup (process throws if absent):
+  DATABASE_URL   — PostgreSQL connection string
+  JWT_SECRET     — Secret for signing/verifying JWTs
+  MASTER_KEY     — 64 hex chars (32 bytes); AES-256 key for license encryption/decryption
+
+Optional:
+  PORT           — HTTP listen port (default: 8080)
+  NODE_ENV       — Set to 'production' to enable SSL on pg pool
+  MASTER_EMAIL   — Email address auto-promoted to MASTER role on initDb()
+  SMTP_USER      — Gmail address for 2FA emails
+  SMTP_PASS      — Gmail app password for 2FA emails
+  SMTP_PORT      — SMTP port (default: 587; set to 465 for SSL)
