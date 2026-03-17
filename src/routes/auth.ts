@@ -34,8 +34,8 @@ function sendTwoFactorEmail(to: string, code: string): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
-      port: Number(SMTP_PORT ?? 587),
-      secure: Number(SMTP_PORT ?? 587) === 465,
+      port: Number(SMTP_PORT ?? 465),
+      secure: Number(SMTP_PORT ?? 465) === 465,
       family: 4,
       connectionTimeout: 5_000,
       greetingTimeout: 5_000,
