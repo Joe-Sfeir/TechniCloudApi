@@ -29,11 +29,11 @@ router.get('/projects', async (_req: Request, res: Response): Promise<void> => {
     name: string;
     tier: number;
     created_at: Date;
-    owner_email: string;
+    client: string;
     last_seen: Date | null;
   }>(
     `SELECT p.id, p.user_id, p.name, p.tier, p.created_at,
-            COALESCE(u.email, '(unassigned)') AS owner_email,
+            COALESCE(u.email, '(unassigned)') AS client,
             MAX(t.timestamp) AS last_seen
      FROM projects p
      LEFT JOIN users u ON u.id = p.user_id
