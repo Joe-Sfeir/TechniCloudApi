@@ -3,7 +3,6 @@ import type { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { randomInt } from 'crypto';
-import nodemailer from 'nodemailer';
 import { pool } from '../db';
 
 const router = Router();
@@ -21,36 +20,29 @@ function isValidEmail(value: string): boolean {
 }
 
 /**
- * Sends the 2FA code by email when SMTP env vars are configured.
+ * Sends the 2FA code by email via Resend when RESEND_API_KEY is configured.
  * Falls back to console logging in development.
  */
 function sendTwoFactorEmail(to: string, code: string): void {
-  const { SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
+  const apiKey = process.env['RESEND_API_KEY'];
 
-  if (SMTP_USER && SMTP_PASS) {
-    // family:4 forces IPv4 — prevents ENETUNREACH on Render's IPv6 nodes.
-    // connectionTimeout/greetingTimeout cap any SMTP hang to 5 s max so the
-    // background task never saturates the event loop.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: Number(SMTP_PORT ?? 465),
-      secure: Number(SMTP_PORT ?? 465) === 465,
-      family: 4,
-      connectionTimeout: 5_000,
-      greetingTimeout: 5_000,
-      auth: { user: SMTP_USER, pass: SMTP_PASS },
-    } as any);
-
-    transporter.sendMail({
-      from: `"TechniDAQ Security" <${SMTP_USER}>`,
-      to,
-      subject: 'Your TechniDAQ login code',
-      text: `Your verification code is: ${code}\n\nThis code expires in 10 minutes.`,
+  if (apiKey) {
+    fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: 'TechniDAQ <onboarding@resend.dev>',
+        to: [to],
+        subject: 'Your TechniDAQ login code',
+        html: `<p>Your verification code is: <strong>${code}</strong></p><p>This code expires in 10 minutes.</p>`,
+      }),
     }).then(() => {
       console.log(`[2FA] Code emailed to ${to}`);
     }).catch((err: unknown) => {
-      console.error('[2FA] SMTP background error:', err);
+      console.error('[2FA] Resend background error:', err);
       console.log(`[2FA] Code for ${to}: ${code}`);
     });
   } else {
