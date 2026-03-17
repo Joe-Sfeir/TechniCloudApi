@@ -25,19 +25,20 @@ function getMasterKey(): string {
 router.get('/projects', async (_req: Request, res: Response): Promise<void> => {
   const result = await pool.query<{
     id: number;
+    user_id: number | null;
     name: string;
     tier: number;
     created_at: Date;
     owner_email: string;
     last_seen: Date | null;
   }>(
-    `SELECT p.id, p.name, p.tier, p.created_at,
+    `SELECT p.id, p.user_id, p.name, p.tier, p.created_at,
             COALESCE(u.email, '(unassigned)') AS owner_email,
             MAX(t.timestamp) AS last_seen
      FROM projects p
      LEFT JOIN users u ON u.id = p.user_id
      LEFT JOIN telemetry t ON t.project_id = p.id
-     GROUP BY p.id, u.email
+     GROUP BY p.id, p.user_id, u.email
      ORDER BY p.created_at DESC`,
   );
 
@@ -170,21 +171,35 @@ router.patch('/projects/:projectId/assign', async (req: Request, res: Response):
       return;
     }
 
-    const result = await pool.query<{
-      id: number;
-      name: string;
-      user_id: number;
-      tier: number | null;
-      created_at: Date;
-    }>(
-      `UPDATE projects SET user_id = $1 WHERE id = $2 RETURNING *`,
+    const updateResult = await pool.query(
+      `UPDATE projects SET user_id = $1 WHERE id = $2`,
       [targetUserId, projectId],
     );
 
-    if ((result.rowCount ?? 0) === 0) {
+    if ((updateResult.rowCount ?? 0) === 0) {
       res.status(404).json({ error: 'Project not found.' });
       return;
     }
+
+    const result = await pool.query<{
+      id: number;
+      user_id: number | null;
+      name: string;
+      tier: number;
+      created_at: Date;
+      owner_email: string;
+      last_seen: Date | null;
+    }>(
+      `SELECT p.id, p.user_id, p.name, p.tier, p.created_at,
+              COALESCE(u.email, '(unassigned)') AS owner_email,
+              MAX(t.timestamp) AS last_seen
+       FROM projects p
+       LEFT JOIN users u ON u.id = p.user_id
+       LEFT JOIN telemetry t ON t.project_id = p.id
+       WHERE p.id = $1
+       GROUP BY p.id, p.user_id, u.email`,
+      [projectId],
+    );
 
     res.status(200).json({ message: 'Project assigned successfully.', project: result.rows[0] });
   } catch (err) {
