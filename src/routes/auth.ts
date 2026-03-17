@@ -125,8 +125,8 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  // ── CLIENT: return JWT immediately ──────────────────────────────────────────
-  if (user.role === 'CLIENT') {
+  // ── CLIENT / SUB_MASTER: return JWT immediately ─────────────────────────────
+  if (user.role === 'CLIENT' || user.role === 'SUB_MASTER') {
     const token = jwt.sign(
       { sub: user.id, email: user.email, role: user.role },
       getJwtSecret(),
@@ -136,7 +136,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  // ── MASTER / SUB_MASTER: trigger 2FA challenge ───────────────────────────────
+  // ── MASTER: trigger 2FA challenge ────────────────────────────────────────────
   // crypto.randomInt is cryptographically secure; range [100000, 1000000) gives
   // exactly 6 digits with uniform distribution.
   const code = randomInt(100_000, 1_000_000).toString();
@@ -186,15 +186,15 @@ router.post('/verify-2fa', async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    // Step 2: check code matches
-    if (user.two_factor_code !== code) {
-      res.status(400).json({ error: 'Invalid code.' });
+    // Step 2: check expiry
+    if (!user.two_factor_expires || new Date() > new Date(user.two_factor_expires)) {
+      res.status(400).json({ error: 'Code expired.' });
       return;
     }
 
-    // Step 3: check expiry
-    if (!user.two_factor_expires || new Date() > new Date(user.two_factor_expires)) {
-      res.status(400).json({ error: 'Code expired.' });
+    // Step 3: check code matches
+    if (user.two_factor_code !== code) {
+      res.status(400).json({ error: 'Invalid code.' });
       return;
     }
 
@@ -214,7 +214,7 @@ router.post('/verify-2fa', async (req: Request, res: Response): Promise<void> =>
     res.status(200).json({ token, user: { id: user.id, email: user.email, role: user.role } });
   } catch (err) {
     console.error('[verify-2fa] Unexpected error:', err);
-    res.status(500).json({ error: 'Internal server error during verification.' });
+    res.status(500).json({ error: 'Internal server error.' });
   }
 });
 

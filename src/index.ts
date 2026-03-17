@@ -3,6 +3,7 @@ dotenv.config();
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import { initDb, pool } from './db';
 import authRouter    from './routes/auth';
 import projectsRouter from './routes/projects';
@@ -27,8 +28,8 @@ const PORT = Number(process.env['PORT']) || 8080;
 
 const ALLOWED_ORIGIN_PATTERNS = [
   /^http:\/\/localhost:5173$/,
-  /\.vercel\.app$/,
-  /technicatgroup\.com$/,
+  /^https:\/\/technicat-website\.vercel\.app$/,
+  /(^|\.)technicatgroup\.com$/,
 ];
 
 app.use(cors({
@@ -46,13 +47,35 @@ app.use(cors({
 
 app.use(express.json({ limit: '1mb' }));
 
+// ── Rate limiters ─────────────────────────────────────────────────────────────
+
+const rateLimitMessage = { error: 'Too many requests. Try again later.' };
+
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: rateLimitMessage,
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: rateLimitMessage,
+});
+
+app.use(globalLimiter);
+
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 app.get('/health', (_req: Request, res: Response) => {
   res.status(200).json({ status: 'ok' });
 });
 
-app.use('/api/auth',     authRouter);
+app.use('/api/auth',     authLimiter, authRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/admin',    adminRouter);
 app.use('/api/export',   exportRouter);

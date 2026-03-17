@@ -70,7 +70,7 @@ router.post('/activate', async (req: Request, res: Response): Promise<void> => {
     payload = decryptLicense(license_key.trim());
   } catch (err) {
     console.error('[activate] Decryption failed:', err);
-    res.status(401).json({ error: 'AES Decryption failed on cloud' });
+    res.status(401).json({ error: 'AES decryption failed on cloud.' });
     return;
   }
 

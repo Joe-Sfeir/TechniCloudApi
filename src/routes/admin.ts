@@ -161,6 +161,15 @@ router.patch('/projects/:projectId/assign', async (req: Request, res: Response):
       return;
     }
 
+    const userCheck = await pool.query<{ id: number }>(
+      'SELECT id FROM users WHERE id = $1',
+      [targetUserId],
+    );
+    if ((userCheck.rowCount ?? 0) === 0) {
+      res.status(400).json({ error: 'User not found.' });
+      return;
+    }
+
     const result = await pool.query<{
       id: number;
       name: string;
