@@ -147,6 +147,11 @@ function validateRow(row: unknown, index: number): row is TelemetryRow {
   if (typeof r['timestamp'] !== 'string')
     throw new Error(`Row ${index}: timestamp must be a string.`);
 
+  // Require an explicit UTC offset so PostgreSQL never interprets the value as
+  // session-local time. The desktop app must send UTC (e.g. "2024-03-21T09:00:00Z").
+  if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(r['timestamp'] as string))
+    throw new Error(`Row ${index}: timestamp must include a UTC offset (e.g. Z or +00:00).`);
+
   if (isNaN(new Date(r['timestamp']).getTime()))
     throw new Error(`Row ${index}: timestamp is not a valid ISO 8601 date.`);
 

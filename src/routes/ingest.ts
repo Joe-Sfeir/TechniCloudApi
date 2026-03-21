@@ -68,6 +68,12 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
 
   const { api_key, device_name, timestamp, data } = bodyWithKey;
 
+  // Require an explicit UTC offset so the timestamp is never misinterpreted as
+  // server-local time. The desktop app must send UTC (e.g. "2024-03-21T09:00:00Z").
+  if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(timestamp)) {
+    res.status(400).json({ error: 'Invalid timestamp: must include a UTC offset (e.g. Z or +00:00).' });
+    return;
+  }
   const parsedTimestamp = new Date(timestamp);
   if (isNaN(parsedTimestamp.getTime())) {
     res.status(400).json({ error: 'Invalid timestamp: must be a valid ISO 8601 date string.' });

@@ -38,11 +38,10 @@ router.get('/projects', async (_req: Request, res: Response): Promise<void> => {
               FILTER (WHERE pa.id IS NOT NULL),
               '[]'::json
             ) AS clients,
-            MAX(t.timestamp) AS last_seen
+            (SELECT MAX(t.timestamp) FROM telemetry t WHERE t.project_id = p.id) AS last_seen
      FROM projects p
      LEFT JOIN project_assignments pa ON pa.project_id = p.id
      LEFT JOIN users u ON u.id = pa.user_id
-     LEFT JOIN telemetry t ON t.project_id = p.id
      GROUP BY p.id
      ORDER BY p.created_at DESC`,
   );
@@ -247,11 +246,10 @@ router.patch('/projects/:projectId/assign', async (req: Request, res: Response):
                 FILTER (WHERE pa.id IS NOT NULL),
                 '[]'::json
               ) AS clients,
-              MAX(t.timestamp) AS last_seen
+              (SELECT MAX(t.timestamp) FROM telemetry t WHERE t.project_id = p.id) AS last_seen
        FROM projects p
        LEFT JOIN project_assignments pa ON pa.project_id = p.id
        LEFT JOIN users u ON u.id = pa.user_id
-       LEFT JOIN telemetry t ON t.project_id = p.id
        WHERE p.id = $1
        GROUP BY p.id`,
       [projectId],
