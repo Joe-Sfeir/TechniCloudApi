@@ -21,9 +21,9 @@ router.get('/:projectId', async (req: Request, res: Response): Promise<void> => 
   const userId = res.locals['userId'] as number;
   const role   = res.locals['role']   as string;
 
-  // Fetch project — MASTER/SUB_MASTER can export any; CLIENT only their own
-  const projectResult = await pool.query<{ id: number; name: string; user_id: number | null }>(
-    'SELECT id, name, user_id FROM projects WHERE id = $1',
+  // Fetch project — MASTER/SUB_MASTER can export any; CLIENT only assigned projects
+  const projectResult = await pool.query<{ id: number; name: string }>(
+    'SELECT id, name FROM projects WHERE id = $1',
     [projectId],
   );
 
@@ -33,9 +33,15 @@ router.get('/:projectId', async (req: Request, res: Response): Promise<void> => 
     return;
   }
 
-  if (role === 'CLIENT' && project.user_id !== userId) {
-    res.status(403).json({ error: 'Forbidden.' });
-    return;
+  if (role === 'CLIENT') {
+    const assignment = await pool.query(
+      'SELECT 1 FROM project_assignments WHERE project_id = $1 AND user_id = $2',
+      [projectId, userId],
+    );
+    if ((assignment.rowCount ?? 0) === 0) {
+      res.status(403).json({ error: 'Forbidden.' });
+      return;
+    }
   }
 
   // Fetch all telemetry ordered for sheet grouping
