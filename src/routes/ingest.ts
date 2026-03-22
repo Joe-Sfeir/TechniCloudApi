@@ -142,7 +142,7 @@ router.get('/telemetry/:projectId', requireAuth, async (req: Request, res: Respo
 
   const since = req.query['since'] as string | undefined;
 
-  let result: QueryResult<{ device_name: string; timestamp: Date; data: Record<string, unknown> }>;
+  let telemetryQuery: Promise<QueryResult<{ device_name: string; timestamp: Date; data: Record<string, unknown> }>>;
 
   if (since) {
     const parsedSince = new Date(since);
@@ -150,7 +150,7 @@ router.get('/telemetry/:projectId', requireAuth, async (req: Request, res: Respo
       res.status(400).json({ error: 'Invalid since parameter — must be an ISO 8601 date string.' });
       return;
     }
-    result = await pool.query(
+    telemetryQuery = pool.query(
       `SELECT device_name, timestamp, data
        FROM telemetry
        WHERE project_id = $1 AND timestamp > $2
@@ -161,7 +161,7 @@ router.get('/telemetry/:projectId', requireAuth, async (req: Request, res: Respo
   } else {
     // Initial load — fetch the most recent 120 rows then re-sort ascending
     // so the chart renders left-to-right chronologically.
-    result = await pool.query(
+    telemetryQuery = pool.query(
       `SELECT device_name, timestamp, data
        FROM (
          SELECT device_name, timestamp, data
@@ -175,6 +175,13 @@ router.get('/telemetry/:projectId', requireAuth, async (req: Request, res: Respo
     );
   }
 
+  const thresholdsQuery = pool.query<{ thresholds: Record<string, unknown> }>(
+    `SELECT thresholds FROM project_activations WHERE project_id = $1 AND is_active = true`,
+    [projectId],
+  );
+
+  const [result, thresholdsResult] = await Promise.all([telemetryQuery, thresholdsQuery]);
+
   // Flatten JSONB data fields into each row so the frontend receives
   // { timestamp, device_name, "Voltage L1": 230.5, ... }
   const rows = result.rows.map((r) => ({
@@ -183,7 +190,10 @@ router.get('/telemetry/:projectId', requireAuth, async (req: Request, res: Respo
     ...(r.data as Record<string, unknown>),
   }));
 
-  res.status(200).json({ project_name: project.name, rows });
+  // Merge thresholds from all active nodes — later nodes overwrite for the same device key
+  const thresholds = Object.assign({}, ...thresholdsResult.rows.map((r) => r.thresholds));
+
+  res.status(200).json({ project_name: project.name, rows, thresholds });
 });
 
 export default router;

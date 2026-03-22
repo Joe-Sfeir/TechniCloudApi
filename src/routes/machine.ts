@@ -419,11 +419,18 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     projectId = legacyResult.rows[0]?.id;
   }
 
-  const { telemetry_array, active_devices } = req.body as Record<string, unknown>;
+  const { telemetry_array, active_devices, thresholds } = req.body as Record<string, unknown>;
 
   if (active_devices !== undefined) {
     if (!Array.isArray(active_devices) || !active_devices.every((d) => typeof d === 'string')) {
       res.status(400).json({ error: 'active_devices must be an array of strings.' });
+      return;
+    }
+  }
+
+  if (thresholds !== undefined) {
+    if (typeof thresholds !== 'object' || thresholds === null || Array.isArray(thresholds)) {
+      res.status(400).json({ error: 'thresholds must be an object.' });
       return;
     }
   }
@@ -460,8 +467,8 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
   // Online path: update last_seen and include config in response
   if (activationId !== undefined) {
     await pool.query(
-      `UPDATE project_activations SET last_seen = NOW(), active_devices = $2 WHERE id = $1`,
-      [activationId, JSON.stringify(active_devices ?? [])],
+      `UPDATE project_activations SET last_seen = NOW(), active_devices = $2, thresholds = $3 WHERE id = $1`,
+      [activationId, JSON.stringify(active_devices ?? []), JSON.stringify(thresholds ?? {})],
     );
 
     const activationRow = onlineResult.rows[0]!;

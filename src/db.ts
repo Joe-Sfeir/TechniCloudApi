@@ -143,6 +143,7 @@ export async function initDb(): Promise<void> {
     ALTER TABLE project_activations DROP CONSTRAINT IF EXISTS project_activations_machine_id_key;
 
     ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS active_devices JSONB NOT NULL DEFAULT '[]';
+    ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS thresholds     JSONB NOT NULL DEFAULT '{}';
 
     -- ── Project configs ──────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS project_configs (
