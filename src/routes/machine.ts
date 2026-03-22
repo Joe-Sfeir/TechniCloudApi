@@ -56,10 +56,91 @@ function decryptLicense(licenseKey: string): LicensePayload {
 router.post('/activate', async (req: Request, res: Response): Promise<void> => {
   console.log('[activate] Activation attempt body:', req.body);
 
-  const { license_key } = req.body as Record<string, unknown>;
+  const body = req.body as Record<string, unknown>;
+  const { license_key, project_key, project_name, node_name } = body;
 
+  // ── Online project activation path ────────────────────────────────────────
+  if (typeof project_key === 'string' && project_key.trim().length > 0) {
+    if (typeof project_name !== 'string' || project_name.trim().length === 0) {
+      res.status(400).json({ error: 'project_name is required.' });
+      return;
+    }
+
+    const projectResult = await pool.query<{
+      id: number;
+      name: string;
+      tier: number;
+      max_activations: number;
+      expires_at: Date | null;
+      is_active: boolean;
+      allowed_meters: unknown[];
+      protocols: string;
+    }>(
+      `SELECT id, name, tier, max_activations, expires_at, is_active, allowed_meters, protocols
+       FROM projects WHERE project_key = $1`,
+      [project_key.trim()],
+    );
+
+    if ((projectResult.rowCount ?? 0) === 0) {
+      res.status(404).json({ error: 'Project not found.' });
+      return;
+    }
+
+    const project = projectResult.rows[0]!;
+
+    if (!project.is_active) {
+      res.status(403).json({ error: 'Project is deactivated.' });
+      return;
+    }
+
+    if (project.expires_at && new Date(project.expires_at) <= new Date()) {
+      res.status(403).json({ error: 'Project has expired.' });
+      return;
+    }
+
+    if (project.name.trim().toLowerCase() !== (project_name as string).trim().toLowerCase()) {
+      res.status(400).json({ error: 'project_name does not match.' });
+      return;
+    }
+
+    const countResult = await pool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM project_activations WHERE project_id = $1 AND is_active = true`,
+      [project.id],
+    );
+    const activeCount = parseInt(countResult.rows[0]?.count ?? '0', 10);
+
+    if (activeCount >= project.max_activations) {
+      res.status(403).json({ error: 'Maximum activations reached for this project.' });
+      return;
+    }
+
+    const machine_id      = `TDAQ-NODE-${randomBytes(16).toString('hex')}`;
+    const machine_api_key = `TDAQ-MAC-${randomBytes(20).toString('hex')}`;
+    const resolvedNodeName = typeof node_name === 'string' ? node_name.trim() : '';
+
+    await pool.query(
+      `INSERT INTO project_activations (project_id, machine_id, machine_api_key, node_name)
+       VALUES ($1, $2, $3, $4)`,
+      [project.id, machine_id, machine_api_key, resolvedNodeName],
+    );
+
+    res.status(201).json({
+      machine_id,
+      machine_api_key,
+      project_id:   project.id,
+      project_name: project.name,
+      tier:         project.tier,
+      allowed_meters: project.allowed_meters,
+      protocols:    project.protocols,
+      expires_at:   project.expires_at,
+      config:       null,
+    });
+    return;
+  }
+
+  // ── Legacy offline license path ───────────────────────────────────────────
   if (typeof license_key !== 'string' || license_key.trim().length === 0) {
-    res.status(400).json({ error: 'license_key is required.' });
+    res.status(400).json({ error: 'license_key or project_key is required.' });
     return;
   }
 
@@ -129,6 +210,75 @@ router.post('/activate', async (req: Request, res: Response): Promise<void> => {
   }
 });
 
+// ── GET /api/machine/config ───────────────────────────────────────────────────
+
+router.get('/config', async (req: Request, res: Response): Promise<void> => {
+  const apiKey = req.headers['x-api-key'];
+
+  if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+    res.status(401).json({ error: 'Missing x-api-key header.' });
+    return;
+  }
+
+  const activationResult = await pool.query<{
+    id: number;
+    project_id: number;
+    machine_id: string;
+    is_active: boolean;
+    project_name: string;
+    tier: number;
+    allowed_meters: unknown[];
+    protocols: string;
+    expires_at: Date | null;
+    project_active: boolean;
+  }>(
+    `SELECT pa.id, pa.project_id, pa.machine_id, pa.is_active,
+            p.name AS project_name, p.tier, p.allowed_meters, p.protocols,
+            p.expires_at, p.is_active AS project_active
+     FROM project_activations pa
+     JOIN projects p ON p.id = pa.project_id
+     WHERE pa.machine_api_key = $1`,
+    [apiKey.trim()],
+  );
+
+  if ((activationResult.rowCount ?? 0) === 0) {
+    res.status(401).json({ error: 'Unauthorized.' });
+    return;
+  }
+
+  const act = activationResult.rows[0]!;
+
+  if (!act.is_active || !act.project_active || (act.expires_at && new Date(act.expires_at) <= new Date())) {
+    res.status(401).json({ error: 'Project deactivated.' });
+    return;
+  }
+
+  await pool.query(
+    `UPDATE project_activations SET last_seen = NOW() WHERE id = $1`,
+    [act.id],
+  );
+
+  const configResult = await pool.query<{ config_version: number; desired_config: unknown }>(
+    `SELECT config_version, desired_config
+     FROM project_configs WHERE project_id = $1 AND machine_id = $2
+     ORDER BY config_version DESC LIMIT 1`,
+    [act.project_id, act.machine_id],
+  );
+
+  const cfg = configResult.rows[0];
+
+  res.status(200).json({
+    project_name:   act.project_name,
+    tier:           act.tier,
+    allowed_meters: act.allowed_meters,
+    protocols:      act.protocols,
+    expires_at:     act.expires_at,
+    is_active:      true,
+    config_version: cfg?.config_version ?? 0,
+    desired_config: cfg?.desired_config ?? null,
+  });
+});
+
 // ── POST /api/machine/ingest ──────────────────────────────────────────────────
 
 interface TelemetryRow {
@@ -169,18 +319,40 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  // Resolve api_key → project_id
-  const projectResult = await pool.query<{ id: number }>(
-    'SELECT id FROM projects WHERE api_key = $1',
-    [apiKey.trim()],
+  const trimmedKey = apiKey.trim();
+
+  // Try online path: machine_api_key in project_activations
+  let projectId: number | undefined;
+  let activationId: number | undefined;
+
+  const onlineResult = await pool.query<{ project_id: number; activation_id: number }>(
+    `SELECT pa.project_id, pa.id AS activation_id
+     FROM project_activations pa
+     JOIN projects p ON p.id = pa.project_id
+     WHERE pa.machine_api_key = $1
+       AND pa.is_active = true
+       AND p.is_active = true
+       AND (p.expires_at IS NULL OR p.expires_at > NOW())`,
+    [trimmedKey],
   );
 
-  if ((projectResult.rowCount ?? 0) === 0) {
-    res.status(401).json({ error: 'Unauthorized.' });
-    return;
-  }
+  if ((onlineResult.rowCount ?? 0) > 0) {
+    projectId    = onlineResult.rows[0]!.project_id;
+    activationId = onlineResult.rows[0]!.activation_id;
+  } else {
+    // Fall back to legacy api_key on projects table
+    const legacyResult = await pool.query<{ id: number }>(
+      'SELECT id FROM projects WHERE api_key = $1',
+      [trimmedKey],
+    );
 
-  const projectId = projectResult.rows[0]?.id;
+    if ((legacyResult.rowCount ?? 0) === 0) {
+      res.status(401).json({ error: 'Unauthorized.' });
+      return;
+    }
+
+    projectId = legacyResult.rows[0]?.id;
+  }
 
   const { telemetry_array } = req.body as Record<string, unknown>;
 
@@ -212,6 +384,34 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
      FROM jsonb_array_elements($2::jsonb) AS elem`,
     [projectId, JSON.stringify(telemetry_array)],
   );
+
+  // Online path: update last_seen and include config in response
+  if (activationId !== undefined) {
+    await pool.query(
+      `UPDATE project_activations SET last_seen = NOW() WHERE id = $1`,
+      [activationId],
+    );
+
+    const activationRow = onlineResult.rows[0]!;
+    const configResult = await pool.query<{ config_version: number; desired_config: unknown }>(
+      `SELECT config_version, desired_config
+       FROM project_configs
+       WHERE project_id = $1 AND machine_id = (
+         SELECT machine_id FROM project_activations WHERE id = $2
+       )
+       ORDER BY config_version DESC LIMIT 1`,
+      [activationRow.project_id, activationId],
+    );
+
+    const cfg = configResult.rows[0];
+    res.status(200).json({
+      success:        true,
+      inserted:       result.rowCount ?? 0,
+      config_version: cfg?.config_version ?? 0,
+      desired_config: cfg?.desired_config ?? null,
+    });
+    return;
+  }
 
   res.status(200).json({ success: true, inserted: result.rowCount ?? 0 });
 });

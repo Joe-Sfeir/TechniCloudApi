@@ -8,9 +8,10 @@ import { initDb, pool } from './db';
 import authRouter    from './routes/auth';
 import projectsRouter from './routes/projects';
 import ingestRouter  from './routes/ingest';
-import adminRouter   from './routes/admin';
-import machineRouter from './routes/machine';
-import exportRouter  from './routes/export';
+import adminRouter          from './routes/admin';
+import onlineProjectsRouter from './routes/online-projects';
+import machineRouter        from './routes/machine';
+import exportRouter         from './routes/export';
 
 // ── Startup guards ────────────────────────────────────────────────────────────
 
@@ -78,6 +79,7 @@ app.get('/health', (_req: Request, res: Response) => {
 app.use('/api/auth',     authLimiter, authRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/admin',    adminRouter);
+app.use('/api/admin',    onlineProjectsRouter);
 app.use('/api/export',   exportRouter);
 // machine router carries its own express.json({ limit: '5mb' }) for batch ingest
 app.use('/api/machine',  machineRouter);

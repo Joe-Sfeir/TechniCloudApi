@@ -108,6 +108,50 @@ export async function initDb(): Promise<void> {
       ttl_hours      INT,
       created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
     );
+
+    -- ── Online project columns (idempotent) ──────────────────────────────────────
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_key     VARCHAR(255) UNIQUE;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS max_activations INT         NOT NULL DEFAULT 1;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS duration_days   INT;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS expires_at      TIMESTAMPTZ;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_active       BOOLEAN     NOT NULL DEFAULT true;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS allowed_meters  JSONB       DEFAULT '[]';
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS protocols       VARCHAR(20) DEFAULT 'All';
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS notes           TEXT        DEFAULT '';
+
+    -- ── Project activations ──────────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS project_activations (
+      id              BIGSERIAL    PRIMARY KEY,
+      project_id      BIGINT       NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      machine_id      VARCHAR(255) UNIQUE NOT NULL,
+      machine_api_key VARCHAR(255) UNIQUE NOT NULL,
+      node_name       VARCHAR(255) DEFAULT '',
+      activated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      last_seen       TIMESTAMPTZ,
+      is_active       BOOLEAN      NOT NULL DEFAULT true,
+      UNIQUE(project_id, machine_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_project_activations_project_id
+      ON project_activations (project_id);
+
+    CREATE INDEX IF NOT EXISTS idx_project_activations_machine_api_key
+      ON project_activations (machine_api_key);
+
+    -- ── Project configs ──────────────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS project_configs (
+      id             BIGSERIAL    PRIMARY KEY,
+      project_id     BIGINT       NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      machine_id     VARCHAR(255) NOT NULL,
+      config_version INT          NOT NULL DEFAULT 1,
+      desired_config JSONB        NOT NULL DEFAULT '{}',
+      current_config JSONB,
+      status         VARCHAR(20)  DEFAULT 'pending',
+      updated_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_project_configs_project_machine
+      ON project_configs (project_id, machine_id);
   `);
 
   // Promote the master account if it exists and hasn't been promoted yet.
