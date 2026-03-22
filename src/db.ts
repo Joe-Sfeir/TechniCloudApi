@@ -138,6 +138,8 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_project_activations_machine_api_key
       ON project_activations (machine_api_key);
 
+    ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS active_devices JSONB NOT NULL DEFAULT '[]';
+
     -- ── Project configs ──────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS project_configs (
       id             BIGSERIAL    PRIMARY KEY,

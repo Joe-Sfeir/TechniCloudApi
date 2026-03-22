@@ -397,7 +397,14 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     projectId = legacyResult.rows[0]?.id;
   }
 
-  const { telemetry_array } = req.body as Record<string, unknown>;
+  const { telemetry_array, active_devices } = req.body as Record<string, unknown>;
+
+  if (active_devices !== undefined) {
+    if (!Array.isArray(active_devices) || !active_devices.every((d) => typeof d === 'string')) {
+      res.status(400).json({ error: 'active_devices must be an array of strings.' });
+      return;
+    }
+  }
 
   if (!Array.isArray(telemetry_array) || telemetry_array.length === 0) {
     res.status(400).json({ error: 'telemetry_array must be a non-empty array.' });
@@ -431,8 +438,8 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
   // Online path: update last_seen and include config in response
   if (activationId !== undefined) {
     await pool.query(
-      `UPDATE project_activations SET last_seen = NOW() WHERE id = $1`,
-      [activationId],
+      `UPDATE project_activations SET last_seen = NOW(), active_devices = $2 WHERE id = $1`,
+      [activationId, JSON.stringify(active_devices ?? [])],
     );
 
     const activationRow = onlineResult.rows[0]!;
