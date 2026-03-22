@@ -54,7 +54,7 @@ const rateLimitMessage = { error: 'Too many requests. Try again later.' };
 
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 600,
   standardHeaders: true,
   legacyHeaders: false,
   message: rateLimitMessage,
@@ -68,7 +68,13 @@ const authLimiter = rateLimit({
   message: rateLimitMessage,
 });
 
-app.use(globalLimiter);
+const ingestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: rateLimitMessage,
+});
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
@@ -76,14 +82,14 @@ app.get('/health', (_req: Request, res: Response) => {
   res.status(200).json({ status: 'ok' });
 });
 
-app.use('/api/auth',     authLimiter, authRouter);
-app.use('/api/projects', projectsRouter);
-app.use('/api/admin',    adminRouter);
-app.use('/api/admin',    onlineProjectsRouter);
-app.use('/api/export',   exportRouter);
+app.use('/api/auth',     authLimiter,   authRouter);
+app.use('/api/projects', globalLimiter, projectsRouter);
+app.use('/api/admin',    globalLimiter, adminRouter);
+app.use('/api/admin',    globalLimiter, onlineProjectsRouter);
+app.use('/api/export',   globalLimiter, exportRouter);
 // machine router carries its own express.json({ limit: '5mb' }) for batch ingest
-app.use('/api/machine',  machineRouter);
-app.use('/api',          ingestRouter);
+app.use('/api/machine',  ingestLimiter, machineRouter);
+app.use('/api',          ingestLimiter, ingestRouter);
 
 // ── Global error handler ──────────────────────────────────────────────────────
 
