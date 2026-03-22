@@ -377,6 +377,32 @@ router.delete('/online-projects/:projectId', async (req: Request, res: Response)
   res.status(200).json({ message: 'Project deleted.' });
 });
 
+// ── DELETE /api/admin/online-projects/:projectId/telemetry ────────────────────
+
+router.delete('/online-projects/:projectId/telemetry', async (req: Request, res: Response): Promise<void> => {
+  const projectId = Number(req.params['projectId']);
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    res.status(400).json({ error: 'projectId must be a positive integer.' });
+    return;
+  }
+
+  const check = await pool.query<{ id: number }>(
+    'SELECT id FROM projects WHERE id = $1 AND project_key IS NOT NULL',
+    [projectId],
+  );
+  if ((check.rowCount ?? 0) === 0) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
+
+  const result = await pool.query(
+    'DELETE FROM telemetry WHERE project_id = $1',
+    [projectId],
+  );
+
+  res.status(200).json({ message: 'Telemetry cleared.', deleted: result.rowCount ?? 0 });
+});
+
 // ── GET /api/admin/online-projects/:projectId/activations ─────────────────────
 
 router.get('/online-projects/:projectId/activations', async (req: Request, res: Response): Promise<void> => {
