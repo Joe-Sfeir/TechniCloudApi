@@ -48,6 +48,10 @@ app.use(cors({
 
 app.use(express.json({ limit: '1mb' }));
 
+// Trust the first proxy hop (Cloud Run → Google load balancer) so that
+// express-rate-limit reads the real client IP from X-Forwarded-For.
+app.set('trust proxy', 1);
+
 // ── Rate limiters ─────────────────────────────────────────────────────────────
 
 const rateLimitMessage = { error: 'Too many requests. Try again later.' };
