@@ -245,6 +245,7 @@ router.patch('/online-projects/:projectId', async (req: Request, res: Response):
       }
       params.push(val);
       setClauses.push(`duration_days = $${params.length}`);
+      params.push(val);
       setClauses.push(`expires_at = NOW() + $${params.length} * INTERVAL '1 day'`);
     } else if (field === 'allowed_meters') {
       if (!Array.isArray(val)) {
