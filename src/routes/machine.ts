@@ -107,40 +107,51 @@ router.post('/activate', async (req: Request, res: Response): Promise<void> => {
 
     // ── If client sent a stable machine_id, check for existing activation ────
     if (typeof provided_machine_id === 'string' && provided_machine_id.trim().length > 0) {
+      const trimmedMachineId = provided_machine_id.trim();
+
       const existingResult = await pool.query<{
         id: number;
+        project_id: number;
         machine_id: string;
         machine_api_key: string;
         is_active: boolean;
       }>(
-        `SELECT id, machine_id, machine_api_key, is_active
-         FROM project_activations WHERE project_id = $1 AND machine_id = $2`,
-        [project.id, provided_machine_id.trim()],
+        `SELECT id, project_id, machine_id, machine_api_key, is_active
+         FROM project_activations WHERE machine_id = $1`,
+        [trimmedMachineId],
       );
 
       if ((existingResult.rowCount ?? 0) > 0) {
         const existing = existingResult.rows[0]!;
 
-        if (!existing.is_active) {
-          // Reactivate a previously deactivated node
-          await pool.query(
-            `UPDATE project_activations SET is_active = true, last_seen = NOW() WHERE id = $1`,
-            [existing.id],
-          );
+        if (existing.project_id === project.id) {
+          // Same project — reuse the existing activation
+          if (!existing.is_active) {
+            await pool.query(
+              `UPDATE project_activations SET is_active = true, last_seen = NOW() WHERE id = $1`,
+              [existing.id],
+            );
+          }
+
+          res.status(200).json({
+            machine_id:      existing.machine_id,
+            machine_api_key: existing.machine_api_key,
+            project_id:      project.id,
+            project_name:    project.name,
+            tier:            project.tier,
+            allowed_meters:  project.allowed_meters,
+            protocols:       project.protocols,
+            expires_at:      project.expires_at,
+            config:          null,
+          });
+          return;
         }
 
-        res.status(200).json({
-          machine_id:     existing.machine_id,
-          machine_api_key: existing.machine_api_key,
-          project_id:     project.id,
-          project_name:   project.name,
-          tier:           project.tier,
-          allowed_meters: project.allowed_meters,
-          protocols:      project.protocols,
-          expires_at:     project.expires_at,
-          config:         null,
-        });
-        return;
+        // Different project — deactivate the old activation before creating a new one
+        await pool.query(
+          `UPDATE project_activations SET is_active = false WHERE id = $1`,
+          [existing.id],
+        );
       }
     }
 
@@ -161,11 +172,22 @@ router.post('/activate', async (req: Request, res: Response): Promise<void> => {
       : `TDAQ-NODE-${randomBytes(16).toString('hex')}`;
     const machine_api_key = `TDAQ-MAC-${randomBytes(20).toString('hex')}`;
 
-    await pool.query(
-      `INSERT INTO project_activations (project_id, machine_id, machine_api_key, node_name)
-       VALUES ($1, $2, $3, $4)`,
-      [project.id, machine_id, machine_api_key, resolvedNodeName],
-    );
+    try {
+      await pool.query(
+        `INSERT INTO project_activations (project_id, machine_id, machine_api_key, node_name)
+         VALUES ($1, $2, $3, $4)`,
+        [project.id, machine_id, machine_api_key, resolvedNodeName],
+      );
+    } catch (err: unknown) {
+      if (
+        typeof err === 'object' && err !== null &&
+        'code' in err && (err as Record<string, unknown>)['code'] === '23505'
+      ) {
+        res.status(409).json({ error: 'This machine ID is already active on another project.' });
+        return;
+      }
+      throw err;
+    }
 
     res.status(201).json({
       machine_id,

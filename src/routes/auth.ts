@@ -5,6 +5,10 @@ import jwt from 'jsonwebtoken';
 import { randomInt } from 'crypto';
 import { pool } from '../db';
 
+// Pre-computed at startup so bcrypt.compare never receives a structurally invalid hash
+// when the email lookup returns no user (timing-safe email enumeration prevention).
+const DUMMY_HASH = await bcrypt.hash('impossible-password-never-matches', 12);
+
 const router = Router();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -116,8 +120,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
   const user = result.rows[0];
 
   // Always run bcrypt.compare to prevent timing-based email enumeration.
-  const dummyHash = '$2a$12$invalidhashfortimingnormalization000000000000000000000';
-  const hashToCompare = user?.password_hash ?? dummyHash;
+  const hashToCompare = user?.password_hash ?? DUMMY_HASH;
   const match = await bcrypt.compare(password, hashToCompare);
 
   if (!user || !match) {

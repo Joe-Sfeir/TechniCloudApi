@@ -138,6 +138,10 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_project_activations_machine_api_key
       ON project_activations (machine_api_key);
 
+    -- Allow the same machine to activate on different projects (one active at a time).
+    -- The composite UNIQUE(project_id, machine_id) remains; the global UNIQUE is dropped.
+    ALTER TABLE project_activations DROP CONSTRAINT IF EXISTS project_activations_machine_id_key;
+
     ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS active_devices JSONB NOT NULL DEFAULT '[]';
 
     -- ── Project configs ──────────────────────────────────────────────────────────
