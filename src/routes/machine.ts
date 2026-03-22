@@ -57,7 +57,7 @@ router.post('/activate', async (req: Request, res: Response): Promise<void> => {
   console.log('[activate] Activation attempt body:', req.body);
 
   const body = req.body as Record<string, unknown>;
-  const { license_key, project_key, project_name, node_name } = body;
+  const { license_key, project_key, project_name, node_name, machine_id: provided_machine_id } = body;
 
   // ── Online project activation path ────────────────────────────────────────
   if (typeof project_key === 'string' && project_key.trim().length > 0) {
@@ -103,6 +103,48 @@ router.post('/activate', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const resolvedNodeName = typeof node_name === 'string' ? node_name.trim() : '';
+
+    // ── If client sent a stable machine_id, check for existing activation ────
+    if (typeof provided_machine_id === 'string' && provided_machine_id.trim().length > 0) {
+      const existingResult = await pool.query<{
+        id: number;
+        machine_id: string;
+        machine_api_key: string;
+        is_active: boolean;
+      }>(
+        `SELECT id, machine_id, machine_api_key, is_active
+         FROM project_activations WHERE project_id = $1 AND machine_id = $2`,
+        [project.id, provided_machine_id.trim()],
+      );
+
+      if ((existingResult.rowCount ?? 0) > 0) {
+        const existing = existingResult.rows[0]!;
+
+        if (!existing.is_active) {
+          // Reactivate a previously deactivated node
+          await pool.query(
+            `UPDATE project_activations SET is_active = true, last_seen = NOW() WHERE id = $1`,
+            [existing.id],
+          );
+        }
+
+        res.status(200).json({
+          machine_id:     existing.machine_id,
+          machine_api_key: existing.machine_api_key,
+          project_id:     project.id,
+          project_name:   project.name,
+          tier:           project.tier,
+          allowed_meters: project.allowed_meters,
+          protocols:      project.protocols,
+          expires_at:     project.expires_at,
+          config:         null,
+        });
+        return;
+      }
+    }
+
+    // ── New activation — check slot availability ──────────────────────────────
     const countResult = await pool.query<{ count: string }>(
       `SELECT COUNT(*) AS count FROM project_activations WHERE project_id = $1 AND is_active = true`,
       [project.id],
@@ -114,9 +156,10 @@ router.post('/activate', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const machine_id      = `TDAQ-NODE-${randomBytes(16).toString('hex')}`;
+    const machine_id = typeof provided_machine_id === 'string' && provided_machine_id.trim().length > 0
+      ? provided_machine_id.trim()
+      : `TDAQ-NODE-${randomBytes(16).toString('hex')}`;
     const machine_api_key = `TDAQ-MAC-${randomBytes(20).toString('hex')}`;
-    const resolvedNodeName = typeof node_name === 'string' ? node_name.trim() : '';
 
     await pool.query(
       `INSERT INTO project_activations (project_id, machine_id, machine_api_key, node_name)
@@ -127,13 +170,13 @@ router.post('/activate', async (req: Request, res: Response): Promise<void> => {
     res.status(201).json({
       machine_id,
       machine_api_key,
-      project_id:   project.id,
-      project_name: project.name,
-      tier:         project.tier,
+      project_id:     project.id,
+      project_name:   project.name,
+      tier:           project.tier,
       allowed_meters: project.allowed_meters,
-      protocols:    project.protocols,
-      expires_at:   project.expires_at,
-      config:       null,
+      protocols:      project.protocols,
+      expires_at:     project.expires_at,
+      config:         null,
     });
     return;
   }
