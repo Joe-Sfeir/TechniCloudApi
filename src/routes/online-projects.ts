@@ -99,7 +99,7 @@ router.get('/online-projects', async (_req: Request, res: Response): Promise<voi
     notes: string;
     created_at: Date;
     activation_count: number;
-    nodes: { machine_id: string; node_name: string; last_seen: Date | null; is_active: boolean }[];
+    nodes: { machine_id: string; node_name: string; last_seen: Date | null; is_active: boolean; polling_state: string }[];
     clients: { id: number; email: string }[];
     last_seen: Date | null;
   }>(
@@ -109,10 +109,11 @@ router.get('/online-projects', async (_req: Request, res: Response): Promise<voi
             COALESCE(
               json_agg(
                 json_build_object(
-                  'machine_id', pa.machine_id,
-                  'node_name',  pa.node_name,
-                  'last_seen',  pa.last_seen,
-                  'is_active',  pa.is_active
+                  'machine_id',    pa.machine_id,
+                  'node_name',     pa.node_name,
+                  'last_seen',     pa.last_seen,
+                  'is_active',     pa.is_active,
+                  'polling_state', pa.polling_state
                 ) ORDER BY pa.activated_at
               ) FILTER (WHERE pa.id IS NOT NULL),
               '[]'::json
@@ -349,6 +350,62 @@ router.post('/online-projects/:projectId/renew', async (req: Request, res: Respo
   res.status(200).json(result.rows[0]);
 });
 
+// ── POST /api/admin/online-projects/:projectId/push-config ───────────────────
+
+router.post('/online-projects/:projectId/push-config', async (req: Request, res: Response): Promise<void> => {
+  const projectId = Number(req.params['projectId']);
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    res.status(400).json({ error: 'projectId must be a positive integer.' });
+    return;
+  }
+
+  const body = req.body as Record<string, unknown>;
+  const { machine_id, config } = body;
+
+  if (typeof machine_id !== 'string' || machine_id.trim().length === 0) {
+    res.status(400).json({ error: 'machine_id is required.' });
+    return;
+  }
+
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    res.status(400).json({ error: 'config must be an object.' });
+    return;
+  }
+
+  const trimmedMachineId = machine_id.trim();
+
+  // Verify the activation exists
+  const activationCheck = await pool.query<{ id: number }>(
+    `SELECT id FROM project_activations WHERE project_id = $1 AND machine_id = $2`,
+    [projectId, trimmedMachineId],
+  );
+
+  if ((activationCheck.rowCount ?? 0) === 0) {
+    res.status(404).json({ error: 'Activation not found.' });
+    return;
+  }
+
+  // Determine next config version
+  const versionResult = await pool.query<{ max_version: number | null }>(
+    `SELECT MAX(config_version) AS max_version FROM project_configs WHERE project_id = $1 AND machine_id = $2`,
+    [projectId, trimmedMachineId],
+  );
+  const nextVersion = (versionResult.rows[0]?.max_version ?? 0) + 1;
+
+  await pool.query(
+    `INSERT INTO project_configs (project_id, machine_id, config_version, desired_config, status)
+     VALUES ($1, $2, $3, $4, 'pending')`,
+    [projectId, trimmedMachineId, nextVersion, JSON.stringify(config)],
+  );
+
+  await pool.query(
+    `UPDATE project_activations SET config_pending = true WHERE project_id = $1 AND machine_id = $2`,
+    [projectId, trimmedMachineId],
+  );
+
+  res.status(200).json({ message: 'Config queued for delivery.', config_version: nextVersion });
+});
+
 // ── DELETE /api/admin/online-projects/:projectId ──────────────────────────────
 
 router.delete('/online-projects/:projectId', async (req: Request, res: Response): Promise<void> => {
@@ -454,11 +511,11 @@ router.patch('/online-projects/:projectId/activations/:machineId', async (req: R
   }
 
   const result = await pool.query<{
-    machine_id: string; node_name: string; activated_at: Date; last_seen: Date | null; is_active: boolean;
+    machine_id: string; node_name: string; activated_at: Date; last_seen: Date | null; is_active: boolean; polling_state: string;
   }>(
     `UPDATE project_activations SET is_active = $1
      WHERE project_id = $2 AND machine_id = $3
-     RETURNING machine_id, node_name, activated_at, last_seen, is_active`,
+     RETURNING machine_id, node_name, activated_at, last_seen, is_active, polling_state`,
     [is_active, projectId, machineId],
   );
 

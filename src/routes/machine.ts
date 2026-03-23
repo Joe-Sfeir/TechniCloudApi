@@ -390,8 +390,14 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
   let projectId: number | undefined;
   let activationId: number | undefined;
 
-  const onlineResult = await pool.query<{ project_id: number; activation_id: number }>(
-    `SELECT pa.project_id, pa.id AS activation_id
+  const onlineResult = await pool.query<{
+    project_id: number;
+    activation_id: number;
+    config_pending: boolean;
+    profiles_pending: boolean;
+  }>(
+    `SELECT pa.project_id, pa.id AS activation_id,
+            pa.config_pending, pa.profiles_pending
      FROM project_activations pa
      JOIN projects p ON p.id = pa.project_id
      WHERE pa.machine_api_key = $1
@@ -419,7 +425,10 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     projectId = legacyResult.rows[0]?.id;
   }
 
-  const { telemetry_array, active_devices, thresholds } = req.body as Record<string, unknown>;
+  const { telemetry_array, active_devices, thresholds, polling_state } = req.body as Record<string, unknown>;
+
+  const resolvedPollingState =
+    polling_state === 'running' || polling_state === 'stopped' ? polling_state : 'running';
 
   if (active_devices !== undefined) {
     if (!Array.isArray(active_devices) || !active_devices.every((d) => typeof d === 'string')) {
@@ -464,14 +473,24 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     [projectId, JSON.stringify(telemetry_array)],
   );
 
-  // Online path: update last_seen and include config in response
+  // Online path: update last_seen, store polling state, clear pending flags, then deliver queued data
   if (activationId !== undefined) {
+    const { project_id, config_pending, profiles_pending } = onlineResult.rows[0]!;
+
+    // Clear flags atomically — values were already captured above before this UPDATE
     await pool.query(
-      `UPDATE project_activations SET last_seen = NOW(), active_devices = $2, thresholds = $3 WHERE id = $1`,
-      [activationId, JSON.stringify(active_devices ?? []), JSON.stringify(thresholds ?? {})],
+      `UPDATE project_activations
+       SET last_seen        = NOW(),
+           active_devices   = $2,
+           thresholds       = $3,
+           polling_state    = $4,
+           config_pending   = false,
+           profiles_pending = false
+       WHERE id = $1`,
+      [activationId, JSON.stringify(active_devices ?? []), JSON.stringify(thresholds ?? {}), resolvedPollingState],
     );
 
-    const activationRow = onlineResult.rows[0]!;
+    // Always fetch the latest config for version tracking
     const configResult = await pool.query<{ config_version: number; desired_config: unknown }>(
       `SELECT config_version, desired_config
        FROM project_configs
@@ -479,16 +498,35 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
          SELECT machine_id FROM project_activations WHERE id = $2
        )
        ORDER BY config_version DESC LIMIT 1`,
-      [activationRow.project_id, activationId],
+      [project_id, activationId],
     );
 
     const cfg = configResult.rows[0];
-    res.status(200).json({
+
+    const responseBody: Record<string, unknown> = {
       success:        true,
       inserted:       result.rowCount ?? 0,
       config_version: cfg?.config_version ?? 0,
       desired_config: cfg?.desired_config ?? null,
-    });
+    };
+
+    if (config_pending) {
+      responseBody['config_update'] = true;
+    }
+
+    if (profiles_pending) {
+      const profilesResult = await pool.query<{
+        id: number; model: string; display_name: string; endianness: string;
+        baud_rate: number | null; parity: string | null; registers: unknown;
+      }>(
+        `SELECT id, model, display_name, endianness, baud_rate, parity, registers
+         FROM meter_profiles ORDER BY model`,
+      );
+      responseBody['profiles_update'] = true;
+      responseBody['meter_profiles']  = profilesResult.rows;
+    }
+
+    res.status(200).json(responseBody);
     return;
   }
 

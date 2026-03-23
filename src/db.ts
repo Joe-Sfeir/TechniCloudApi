@@ -142,8 +142,11 @@ export async function initDb(): Promise<void> {
     -- The composite UNIQUE(project_id, machine_id) remains; the global UNIQUE is dropped.
     ALTER TABLE project_activations DROP CONSTRAINT IF EXISTS project_activations_machine_id_key;
 
-    ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS active_devices JSONB NOT NULL DEFAULT '[]';
-    ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS thresholds     JSONB NOT NULL DEFAULT '{}';
+    ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS active_devices    JSONB       NOT NULL DEFAULT '[]';
+    ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS thresholds        JSONB       NOT NULL DEFAULT '{}';
+    ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS polling_state     VARCHAR(20) NOT NULL DEFAULT 'stopped';
+    ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS config_pending    BOOLEAN     NOT NULL DEFAULT false;
+    ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS profiles_pending  BOOLEAN     NOT NULL DEFAULT false;
 
     -- ── Project configs ──────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS project_configs (
@@ -159,6 +162,26 @@ export async function initDb(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_project_configs_project_machine
       ON project_configs (project_id, machine_id);
+
+    -- ── Meter profiles ───────────────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS meter_profiles (
+      id           BIGSERIAL    PRIMARY KEY,
+      model        VARCHAR(255) UNIQUE NOT NULL,
+      display_name VARCHAR(255) NOT NULL,
+      endianness   VARCHAR(10)  NOT NULL DEFAULT 'ABCD',
+      baud_rate    INT          DEFAULT 19200,
+      parity       VARCHAR(10)  DEFAULT 'None',
+      registers    JSONB        NOT NULL DEFAULT '[]',
+      created_by   BIGINT       REFERENCES users(id),
+      updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    );
+
+    -- ── KV store ─────────────────────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS kv (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    INSERT INTO kv (key, value) VALUES ('max_client_sessions', '10') ON CONFLICT (key) DO NOTHING;
   `);
 
   // Promote the master account if it exists and hasn't been promoted yet.

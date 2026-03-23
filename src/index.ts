@@ -12,6 +12,7 @@ import adminRouter          from './routes/admin';
 import onlineProjectsRouter from './routes/online-projects';
 import machineRouter        from './routes/machine';
 import exportRouter         from './routes/export';
+import meterProfilesRouter  from './routes/meter-profiles';
 
 // ── Startup guards ────────────────────────────────────────────────────────────
 
@@ -90,6 +91,7 @@ app.use('/api/auth',     authLimiter,   authRouter);
 app.use('/api/projects', globalLimiter, projectsRouter);
 app.use('/api/admin',    globalLimiter, adminRouter);
 app.use('/api/admin',    globalLimiter, onlineProjectsRouter);
+app.use('/api/admin',    globalLimiter, meterProfilesRouter);
 app.use('/api/export',   globalLimiter, exportRouter);
 // machine router carries its own express.json({ limit: '5mb' }) for batch ingest
 app.use('/api/machine',  ingestLimiter, machineRouter);
