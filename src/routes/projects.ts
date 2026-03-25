@@ -218,4 +218,50 @@ router.post('/:projectId/config', async (req: Request, res: Response): Promise<v
   res.status(200).json({ config_version: nextVersion, message: 'Configuration queued for delivery.' });
 });
 
+// ── GET /api/projects/:projectId/nodes ────────────────────────────────────────
+
+router.get('/:projectId/nodes', async (req: Request, res: Response): Promise<void> => {
+  const projectId = Number(req.params['projectId']);
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    res.status(400).json({ error: 'projectId must be a positive integer.' });
+    return;
+  }
+
+  const userId = res.locals['userId'] as number;
+  const role   = res.locals['role'] as string;
+
+  if (!(await checkProjectAccess(projectId, userId, role))) {
+    res.status(403).json({ error: 'Forbidden.' });
+    return;
+  }
+
+  const projectResult = await pool.query<{ protocols: string }>(
+    `SELECT protocols FROM projects WHERE id = $1`,
+    [projectId],
+  );
+
+  if ((projectResult.rowCount ?? 0) === 0) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
+
+  const nodesResult = await pool.query<{
+    machine_id: string;
+    node_name: string;
+    polling_state: string;
+    last_seen: Date | null;
+  }>(
+    `SELECT machine_id, node_name, polling_state, last_seen
+     FROM project_activations
+     WHERE project_id = $1 AND is_active = true
+     ORDER BY activated_at`,
+    [projectId],
+  );
+
+  res.status(200).json({
+    protocols: projectResult.rows[0]!.protocols,
+    nodes:     nodesResult.rows,
+  });
+});
+
 export default router;

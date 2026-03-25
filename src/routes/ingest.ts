@@ -175,8 +175,15 @@ router.get('/telemetry/:projectId', requireAuth, async (req: Request, res: Respo
     );
   }
 
-  const thresholdsQuery = pool.query<{ thresholds: Record<string, unknown> }>(
-    `SELECT thresholds FROM project_activations WHERE project_id = $1 AND is_active = true`,
+  const thresholdsQuery = pool.query<{
+    thresholds: Record<string, unknown>;
+    polling_state: string;
+    node_name: string;
+    machine_id: string;
+    active_devices: unknown;
+  }>(
+    `SELECT thresholds, polling_state, node_name, machine_id, active_devices
+     FROM project_activations WHERE project_id = $1 AND is_active = true`,
     [projectId],
   );
 
@@ -193,7 +200,14 @@ router.get('/telemetry/:projectId', requireAuth, async (req: Request, res: Respo
   // Merge thresholds from all active nodes — later nodes overwrite for the same device key
   const thresholds = Object.assign({}, ...thresholdsResult.rows.map((r) => r.thresholds));
 
-  res.status(200).json({ project_name: project.name, rows, thresholds });
+  const nodes = thresholdsResult.rows.map((r) => ({
+    machine_id:     r.machine_id,
+    node_name:      r.node_name,
+    polling_state:  r.polling_state,
+    active_devices: r.active_devices,
+  }));
+
+  res.status(200).json({ project_name: project.name, rows, thresholds, nodes });
 });
 
 export default router;
