@@ -499,14 +499,17 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  // Single bulk INSERT via jsonb_array_elements — one round-trip regardless of batch size
+  // Single bulk INSERT via jsonb_array_elements — one round-trip regardless of batch size.
+  // ON CONFLICT DO NOTHING silently skips duplicate (project_id, device_name, timestamp) rows
+  // so retried batches from the desktop are safe.
   const result = await pool.query(
     `INSERT INTO telemetry (project_id, device_name, timestamp, data)
      SELECT $1,
             elem->>'device_name',
             (elem->>'timestamp')::timestamptz,
             elem->'data'
-     FROM jsonb_array_elements($2::jsonb) AS elem`,
+     FROM jsonb_array_elements($2::jsonb) AS elem
+     ON CONFLICT (project_id, device_name, timestamp) DO NOTHING`,
     [projectId, JSON.stringify(telemetry_array)],
   );
 

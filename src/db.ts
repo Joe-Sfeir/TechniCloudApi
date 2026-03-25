@@ -80,6 +80,9 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_telemetry_project_timestamp
       ON telemetry (project_id, timestamp DESC);
 
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_telemetry_unique
+      ON telemetry (project_id, device_name, timestamp);
+
     -- ── Project Assignments ──────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS project_assignments (
       id          BIGSERIAL   PRIMARY KEY,
@@ -192,6 +195,76 @@ export async function initDb(): Promise<void> {
       `UPDATE users SET role = 'MASTER' WHERE email = $1 AND role != 'MASTER'`,
       [masterEmail.toLowerCase()],
     );
+  }
+
+  // Seed default meter profiles on first run
+  const seedCheck = await pool.query<{ count: number }>(
+    'SELECT COUNT(*)::int AS count FROM meter_profiles',
+  );
+  if ((seedCheck.rows[0]?.count ?? 0) === 0) {
+    const schneiderRegisters = JSON.stringify([
+      { name: 'Current A',                address: 3000, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Current B',                address: 3002, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Current C',                address: 3004, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Current N',                address: 3006, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Current Avg',              address: 3010, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage A-B',              address: 3020, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage B-C',              address: 3022, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage C-A',              address: 3024, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage L-N Avg',          address: 3036, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Active Power Total',       address: 3060, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Reactive Power Total',     address: 3068, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Apparent Power Total',     address: 3076, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Power Factor Total',       address: 3084, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Frequency',               address: 3110, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Active Energy Delivered',  address: 3204, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Reactive Energy Delivered',address: 3220, length: 2, data_type: 'Float32', multiplier: 1.0 },
+    ]);
+
+    const socomecRegisters = JSON.stringify([
+      { name: 'Voltage L1-L2',       address: 50526, length: 2, data_type: 'Float32', multiplier: 1.0   },
+      { name: 'Voltage L2-L3',       address: 50528, length: 2, data_type: 'Float32', multiplier: 1.0   },
+      { name: 'Voltage L3-L1',       address: 50530, length: 2, data_type: 'Float32', multiplier: 1.0   },
+      { name: 'Current L1',          address: 50536, length: 2, data_type: 'Float32', multiplier: 1.0   },
+      { name: 'Current L2',          address: 50538, length: 2, data_type: 'Float32', multiplier: 1.0   },
+      { name: 'Current L3',          address: 50540, length: 2, data_type: 'Float32', multiplier: 1.0   },
+      { name: 'Active Power Total',  address: 50546, length: 2, data_type: 'Float32', multiplier: 0.001 },
+      { name: 'Reactive Power Total',address: 50548, length: 2, data_type: 'Float32', multiplier: 0.001 },
+      { name: 'Apparent Power Total',address: 50550, length: 2, data_type: 'Float32', multiplier: 0.001 },
+      { name: 'Power Factor',        address: 50554, length: 2, data_type: 'Float32', multiplier: 1.0   },
+      { name: 'Frequency',           address: 50556, length: 2, data_type: 'Float32', multiplier: 1.0   },
+      { name: 'Active Energy',       address: 51028, length: 2, data_type: 'Float32', multiplier: 1.0   },
+    ]);
+
+    const lovatoRegisters = JSON.stringify([
+      { name: 'Voltage L1-N',        address:  0, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage L2-N',        address:  2, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage L3-N',        address:  4, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage L1-L2',       address:  6, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Current L1',          address: 16, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Current L2',          address: 18, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Current L3',          address: 20, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Active Power Total',  address: 40, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Reactive Power Total',address: 44, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Power Factor Total',  address: 48, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Frequency',           address: 50, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Active Energy',       address: 58, length: 2, data_type: 'Float32', multiplier: 1.0 },
+    ]);
+
+    await pool.query(
+      `INSERT INTO meter_profiles (model, display_name, endianness, baud_rate, parity, registers, created_by, updated_at) VALUES
+       ($1,  $2,  $3,    $4,    $5,     $6,  NULL, NOW()),
+       ($7,  $8,  $9,    $10,   $11,    $12, NULL, NOW()),
+       ($13, $14, $15,   $16,   $17,    $18, NULL, NOW()),
+       ($19, $20, 'ABCD', 19200, 'None', '[]', NULL, NOW())`,
+      [
+        'schneider-pm2220',  'Schneider PM2220',  'ABCD', 19200, 'Even', schneiderRegisters,
+        'socomec-diris-a40', 'Socomec Diris A40', 'CDAB',  9600, 'Even', socomecRegisters,
+        'lovato-dmg',        'Lovato DMG',         'ABCD', 19200, 'None', lovatoRegisters,
+        'simulation',        'Simulation',
+      ],
+    );
+    console.log('[db] Default meter profiles seeded');
   }
 
   console.log('[db] Schema ready');
