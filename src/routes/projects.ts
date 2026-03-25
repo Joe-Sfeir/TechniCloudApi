@@ -95,7 +95,7 @@ router.get('/:projectId/config/:machineId', async (req: Request, res: Response):
   }
 
   const machineId = req.params['machineId'];
-  if (!machineId || machineId.trim().length === 0) {
+  if (!machineId) {
     res.status(400).json({ error: 'machineId is required.' });
     return;
   }
@@ -117,7 +117,7 @@ router.get('/:projectId/config/:machineId', async (req: Request, res: Response):
   }>(
     `SELECT active_devices, thresholds, polling_state, last_seen, config_pending
      FROM project_activations WHERE project_id = $1 AND machine_id = $2`,
-    [projectId, machineId.trim()],
+    [projectId, machineId],
   );
 
   if ((activationResult.rowCount ?? 0) === 0) {
@@ -135,7 +135,7 @@ router.get('/:projectId/config/:machineId', async (req: Request, res: Response):
     `SELECT config_version, desired_config, current_config, status, updated_at
      FROM project_configs WHERE project_id = $1 AND machine_id = $2
      ORDER BY config_version DESC LIMIT 1`,
-    [projectId, machineId.trim()],
+    [projectId, machineId],
   );
 
   const cfg = configResult.rows[0];
