@@ -5,6 +5,7 @@ import type { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { initDb, pool } from './db';
+import { requireAuth } from './middleware/auth';
 import authRouter    from './routes/auth';
 import projectsRouter from './routes/projects';
 import ingestRouter  from './routes/ingest';
@@ -96,6 +97,19 @@ app.use('/api/export',   globalLimiter, exportRouter);
 // machine router carries its own express.json({ limit: '5mb' }) for batch ingest
 app.use('/api/machine',  ingestLimiter, machineRouter);
 app.use('/api',          ingestLimiter, ingestRouter);
+
+// ── GET /api/meter-profiles (auth-only, all roles) ────────────────────────────
+
+app.get('/api/meter-profiles', globalLimiter, requireAuth, async (_req: Request, res: Response): Promise<void> => {
+  const result = await pool.query<{
+    id: number; model: string; display_name: string; endianness: string;
+    baud_rate: number | null; parity: string | null; registers: unknown;
+  }>(
+    `SELECT id, model, display_name, endianness, baud_rate, parity, registers
+     FROM meter_profiles ORDER BY model`,
+  );
+  res.status(200).json(result.rows);
+});
 
 // ── Global error handler ──────────────────────────────────────────────────────
 

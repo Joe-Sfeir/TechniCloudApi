@@ -310,6 +310,15 @@ router.patch('/online-projects/:projectId', async (req: Request, res: Response):
     );
   }
 
+  // Notify live nodes when settings that affect desktop behaviour change
+  const settingsChanged = ['allowed_meters', 'protocols', 'tier'].some((f) => f in body);
+  if (settingsChanged) {
+    await pool.query(
+      `UPDATE project_activations SET config_pending = true WHERE project_id = $1 AND is_active = true`,
+      [projectId],
+    );
+  }
+
   res.status(200).json(result.rows[0]);
 });
 

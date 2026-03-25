@@ -344,6 +344,39 @@ router.get('/config', async (req: Request, res: Response): Promise<void> => {
   });
 });
 
+// ── POST /api/machine/status ──────────────────────────────────────────────────
+
+router.post('/status', async (req: Request, res: Response): Promise<void> => {
+  const apiKey = req.headers['x-api-key'];
+
+  if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+    res.status(401).json({ error: 'Missing x-api-key header.' });
+    return;
+  }
+
+  const { polling_state } = req.body as Record<string, unknown>;
+
+  if (polling_state !== 'running' && polling_state !== 'stopped' && polling_state !== 'fault') {
+    res.status(400).json({ error: 'polling_state must be "running", "stopped", or "fault".' });
+    return;
+  }
+
+  const result = await pool.query(
+    `UPDATE project_activations
+     SET polling_state = $1, last_seen = NOW()
+     WHERE machine_api_key = $2
+     RETURNING id`,
+    [polling_state, apiKey.trim()],
+  );
+
+  if ((result.rowCount ?? 0) === 0) {
+    res.status(401).json({ error: 'Unauthorized.' });
+    return;
+  }
+
+  res.status(200).json({ success: true });
+});
+
 // ── POST /api/machine/ingest ──────────────────────────────────────────────────
 
 interface TelemetryRow {
@@ -395,9 +428,13 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     activation_id: number;
     config_pending: boolean;
     profiles_pending: boolean;
+    allowed_meters: unknown[];
+    protocols: string;
+    tier: number;
   }>(
     `SELECT pa.project_id, pa.id AS activation_id,
-            pa.config_pending, pa.profiles_pending
+            pa.config_pending, pa.profiles_pending,
+            p.allowed_meters, p.protocols, p.tier
      FROM project_activations pa
      JOIN projects p ON p.id = pa.project_id
      WHERE pa.machine_api_key = $1
@@ -512,6 +549,9 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
 
     if (config_pending) {
       responseBody['config_update'] = true;
+      responseBody['allowed_meters'] = onlineResult.rows[0]!.allowed_meters;
+      responseBody['protocols']      = onlineResult.rows[0]!.protocols;
+      responseBody['tier']           = onlineResult.rows[0]!.tier;
     }
 
     if (profiles_pending) {
