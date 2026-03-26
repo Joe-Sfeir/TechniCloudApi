@@ -251,21 +251,53 @@ export async function initDb(): Promise<void> {
       { name: 'Active Energy',       address: 58, length: 2, data_type: 'Float32', multiplier: 1.0 },
     ]);
 
+    const simulationRegisters = JSON.stringify([
+      { name: 'Current A',               address: 3000, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Current B',               address: 3002, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Current C',               address: 3004, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage A-B',             address: 3020, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage B-C',             address: 3022, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage C-A',             address: 3024, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Active Power Total',      address: 3060, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Power Factor Total',      address: 3084, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Frequency',               address: 3110, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Active Energy Delivered', address: 3204, length: 2, data_type: 'Float32', multiplier: 1.0 },
+    ]);
+
     await pool.query(
       `INSERT INTO meter_profiles (model, display_name, endianness, baud_rate, parity, registers, created_by, updated_at) VALUES
        ($1,  $2,  $3,    $4,    $5,     $6,  NULL, NOW()),
        ($7,  $8,  $9,    $10,   $11,    $12, NULL, NOW()),
        ($13, $14, $15,   $16,   $17,    $18, NULL, NOW()),
-       ($19, $20, 'ABCD', 19200, 'None', '[]', NULL, NOW())`,
+       ($19, $20, 'ABCD', 19200, 'None', $21, NULL, NOW())`,
       [
         'schneider-pm2220',  'Schneider PM2220',  'ABCD', 19200, 'Even', schneiderRegisters,
         'socomec-diris-a40', 'Socomec Diris A40', 'CDAB',  9600, 'Even', socomecRegisters,
         'lovato-dmg',        'Lovato DMG',         'ABCD', 19200, 'None', lovatoRegisters,
-        'simulation',        'Simulation',
+        'simulation',        'Simulation',         simulationRegisters,
       ],
     );
     console.log('[db] Default meter profiles seeded');
   }
+
+  // Remediate existing deployments where the simulation profile has empty registers.
+  await pool.query(
+    `UPDATE meter_profiles
+     SET registers = $1, updated_at = NOW()
+     WHERE model = 'simulation' AND registers::text = '[]'`,
+    [JSON.stringify([
+      { name: 'Current A',               address: 3000, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Current B',               address: 3002, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Current C',               address: 3004, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage A-B',             address: 3020, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage B-C',             address: 3022, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Voltage C-A',             address: 3024, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Active Power Total',      address: 3060, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Power Factor Total',      address: 3084, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Frequency',               address: 3110, length: 2, data_type: 'Float32', multiplier: 1.0 },
+      { name: 'Active Energy Delivered', address: 3204, length: 2, data_type: 'Float32', multiplier: 1.0 },
+    ])],
+  );
 
   console.log('[db] Schema ready');
 }
