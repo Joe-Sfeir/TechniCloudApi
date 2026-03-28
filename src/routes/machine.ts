@@ -593,6 +593,7 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     };
 
     if (config_pending) {
+      console.log('[ingest-debug] !!! CONFIG PENDING TRUE - will return config_update to desktop');
       console.log('[ingest-debug] config_update=true, fetching desired_config');
       responseBody['config_update'] = true;
       responseBody['allowed_meters'] = onlineResult.rows[0]!.allowed_meters;
