@@ -555,7 +555,8 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     const { project_id, config_pending, profiles_pending } = onlineResult.rows[0]!;
 
     // Clear flags atomically — values were already captured above before this UPDATE
-    await pool.query(
+    console.log('[ingest-debug] updating activation:', { polling_state, current_config: current_config ? 'present (' + JSON.stringify(current_config).length + ' chars)' : 'null', active_devices });
+    const updateResult = await pool.query(
       `UPDATE project_activations
        SET last_seen        = NOW(),
            active_devices   = $2,
@@ -567,6 +568,7 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
        WHERE id = $1`,
       [activationId, JSON.stringify(active_devices ?? []), JSON.stringify(thresholds ?? {}), resolvedPollingState, JSON.stringify(current_config ?? [])],
     );
+    console.log('[ingest-debug] UPDATE result rowCount:', updateResult.rowCount);
 
     // Always fetch the latest config for version tracking
     const configResult = await pool.query<{ config_version: number; desired_config: unknown }>(
