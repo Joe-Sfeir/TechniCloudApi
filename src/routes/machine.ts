@@ -553,6 +553,7 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
   // Online path: update last_seen, store polling state, clear pending flags, then deliver queued data
   if (activationId !== undefined) {
     const { project_id, config_pending, profiles_pending } = onlineResult.rows[0]!;
+    console.log('[ingest-debug] flags:', { config_pending, profiles_pending });
 
     // Clear flags atomically — values were already captured above before this UPDATE
     console.log('[ingest-debug] updating activation:', { polling_state, current_config: current_config ? 'present (' + JSON.stringify(current_config).length + ' chars)' : 'null', active_devices });
@@ -582,6 +583,7 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     );
 
     const cfg = configResult.rows[0];
+    console.log('[ingest-debug] desired_config result:', JSON.stringify(configResult?.rows?.[0] ?? 'no rows'));
 
     const responseBody: Record<string, unknown> = {
       success:        true,
@@ -591,6 +593,7 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     };
 
     if (config_pending) {
+      console.log('[ingest-debug] config_update=true, fetching desired_config');
       responseBody['config_update'] = true;
       responseBody['allowed_meters'] = onlineResult.rows[0]!.allowed_meters;
       responseBody['protocols']      = onlineResult.rows[0]!.protocols;
