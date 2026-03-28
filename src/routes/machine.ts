@@ -462,7 +462,7 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     projectId = legacyResult.rows[0]?.id;
   }
 
-  const { telemetry_array, active_devices, thresholds, polling_state } = req.body as Record<string, unknown>;
+  const { telemetry_array, active_devices, thresholds, polling_state, current_config } = req.body as Record<string, unknown>;
 
   const resolvedPollingState =
     polling_state === 'running' || polling_state === 'stopped' ? polling_state : 'running';
@@ -524,10 +524,11 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
            active_devices   = $2,
            thresholds       = $3,
            polling_state    = $4,
+           current_config   = $5,
            config_pending   = false,
            profiles_pending = false
        WHERE id = $1`,
-      [activationId, JSON.stringify(active_devices ?? []), JSON.stringify(thresholds ?? {}), resolvedPollingState],
+      [activationId, JSON.stringify(active_devices ?? []), JSON.stringify(thresholds ?? {}), resolvedPollingState, JSON.stringify(current_config ?? [])],
     );
 
     // Always fetch the latest config for version tracking

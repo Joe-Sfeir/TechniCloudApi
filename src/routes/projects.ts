@@ -114,8 +114,9 @@ router.get('/:projectId/config/:machineId', async (req: Request, res: Response):
     polling_state: string;
     last_seen: Date | null;
     config_pending: boolean;
+    current_config: unknown;
   }>(
-    `SELECT active_devices, thresholds, polling_state, last_seen, config_pending
+    `SELECT active_devices, thresholds, polling_state, last_seen, config_pending, current_config
      FROM project_activations WHERE project_id = $1 AND machine_id = $2`,
     [projectId, machineId],
   );
@@ -144,7 +145,7 @@ router.get('/:projectId/config/:machineId', async (req: Request, res: Response):
   res.status(200).json({
     config_version: cfg?.config_version ?? null,
     desired_config: cfg?.desired_config ?? null,
-    current_config: cfg?.current_config ?? null,
+    current_config: act.current_config ?? cfg?.current_config ?? null,
     status:         cfg?.status ?? null,
     updated_at:     cfg?.updated_at ?? null,
     active_devices: act.active_devices,

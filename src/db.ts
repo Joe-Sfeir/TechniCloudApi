@@ -150,6 +150,7 @@ export async function initDb(): Promise<void> {
     ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS polling_state     VARCHAR(20) NOT NULL DEFAULT 'stopped';
     ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS config_pending    BOOLEAN     NOT NULL DEFAULT false;
     ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS profiles_pending  BOOLEAN     NOT NULL DEFAULT false;
+    ALTER TABLE project_activations ADD COLUMN IF NOT EXISTS current_config    JSONB                DEFAULT '[]';
 
     -- ── Project configs ──────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS project_configs (
