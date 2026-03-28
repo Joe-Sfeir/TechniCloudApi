@@ -159,6 +159,7 @@ router.get('/:projectId/config/:machineId', async (req: Request, res: Response):
 // ── POST /api/projects/:projectId/config ──────────────────────────────────────
 
 router.post('/:projectId/config', async (req: Request, res: Response): Promise<void> => {
+  console.log('[config-push-debug] received:', { projectId: req.params['projectId'], machine_id: (req.body as Record<string, unknown>)['machine_id'] });
   const projectId = Number(req.params['projectId']);
   if (!Number.isInteger(projectId) || projectId <= 0) {
     res.status(400).json({ error: 'projectId must be a positive integer.' });
@@ -211,10 +212,12 @@ router.post('/:projectId/config', async (req: Request, res: Response): Promise<v
     [projectId, trimmedMachineId, nextVersion, JSON.stringify(config)],
   );
 
-  await pool.query(
+  console.log('[config-push-debug] setting config_pending=true for project_id=' + projectId + ' machine_id=' + machine_id);
+  const updateResult = await pool.query(
     `UPDATE project_activations SET config_pending = true WHERE project_id = $1 AND machine_id = $2`,
     [projectId, trimmedMachineId],
   );
+  console.log('[config-push-debug] UPDATE rowCount:', updateResult.rowCount);
 
   res.status(200).json({ config_version: nextVersion, message: 'Configuration queued for delivery.' });
 });
