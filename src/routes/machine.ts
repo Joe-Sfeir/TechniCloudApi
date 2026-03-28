@@ -377,6 +377,43 @@ router.post('/status', async (req: Request, res: Response): Promise<void> => {
   res.status(200).json({ success: true });
 });
 
+// ── GET /api/machine/meter-profiles ──────────────────────────────────────────
+
+router.get('/meter-profiles', async (req: Request, res: Response): Promise<void> => {
+  const apiKey = req.headers['x-api-key'];
+
+  if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+    res.status(401).json({ error: 'Missing x-api-key header.' });
+    return;
+  }
+
+  const activationResult = await pool.query<{ id: number }>(
+    `SELECT pa.id
+     FROM project_activations pa
+     JOIN projects p ON p.id = pa.project_id
+     WHERE pa.machine_api_key = $1
+       AND pa.is_active = true
+       AND p.is_active = true
+       AND (p.expires_at IS NULL OR p.expires_at > NOW())`,
+    [apiKey.trim()],
+  );
+
+  if ((activationResult.rowCount ?? 0) === 0) {
+    res.status(401).json({ error: 'Unauthorized.' });
+    return;
+  }
+
+  const profilesResult = await pool.query<{
+    id: number; model: string; display_name: string; endianness: string;
+    baud_rate: number | null; parity: string | null; registers: unknown;
+  }>(
+    `SELECT id, model, display_name, endianness, baud_rate, parity, registers
+     FROM meter_profiles ORDER BY model`,
+  );
+
+  res.status(200).json(profilesResult.rows);
+});
+
 // ── POST /api/machine/ingest ──────────────────────────────────────────────────
 
 interface TelemetryRow {
@@ -481,8 +518,8 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     }
   }
 
-  if (!Array.isArray(telemetry_array) || telemetry_array.length === 0) {
-    res.status(400).json({ error: 'telemetry_array must be a non-empty array.' });
+  if (!Array.isArray(telemetry_array)) {
+    res.status(400).json({ error: 'telemetry_array must be an array.' });
     return;
   }
 
