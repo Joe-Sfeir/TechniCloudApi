@@ -185,7 +185,10 @@ export async function initDb(): Promise<void> {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
-    INSERT INTO kv (key, value) VALUES ('max_client_sessions', '10') ON CONFLICT (key) DO NOTHING;
+    INSERT INTO kv (key, value) VALUES ('max_client_sessions', '10')  ON CONFLICT (key) DO NOTHING;
+    INSERT INTO kv (key, value) VALUES ('latest_app_version',  '0.1.0') ON CONFLICT (key) DO NOTHING;
+    INSERT INTO kv (key, value) VALUES ('update_notes',        '')       ON CONFLICT (key) DO NOTHING;
+    INSERT INTO kv (key, value) VALUES ('update_url',          '')       ON CONFLICT (key) DO NOTHING;
   `);
 
   // Promote the master account if it exists and hasn't been promoted yet.

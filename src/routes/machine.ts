@@ -571,25 +571,29 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     );
     console.log('[ingest-debug] UPDATE result rowCount:', updateResult.rowCount);
 
-    // Always fetch the latest config for version tracking
-    const configResult = await pool.query<{ config_version: number; desired_config: unknown }>(
-      `SELECT config_version, desired_config
-       FROM project_configs
-       WHERE project_id = $1 AND machine_id = (
-         SELECT machine_id FROM project_activations WHERE id = $2
-       )
-       ORDER BY config_version DESC LIMIT 1`,
-      [project_id, activationId],
-    );
+    // Always fetch the latest config and current app version in parallel
+    const [configResult, kvResult] = await Promise.all([
+      pool.query<{ config_version: number; desired_config: unknown }>(
+        `SELECT config_version, desired_config
+         FROM project_configs
+         WHERE project_id = $1 AND machine_id = (
+           SELECT machine_id FROM project_activations WHERE id = $2
+         )
+         ORDER BY config_version DESC LIMIT 1`,
+        [project_id, activationId],
+      ),
+      pool.query<{ value: string }>(`SELECT value FROM kv WHERE key = 'latest_app_version'`),
+    ]);
 
     const cfg = configResult.rows[0];
     console.log('[ingest-debug] desired_config result:', JSON.stringify(configResult?.rows?.[0] ?? 'no rows'));
 
     const responseBody: Record<string, unknown> = {
-      success:        true,
-      inserted:       result.rowCount ?? 0,
-      config_version: cfg?.config_version ?? 0,
-      desired_config: cfg?.desired_config ?? null,
+      success:             true,
+      inserted:            result.rowCount ?? 0,
+      config_version:      cfg?.config_version ?? 0,
+      desired_config:      cfg?.desired_config ?? null,
+      latest_app_version:  kvResult.rows[0]?.value ?? '0.1.0',
     };
 
     if (config_pending) {
@@ -617,7 +621,8 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  res.status(200).json({ success: true, inserted: result.rowCount ?? 0 });
+  const legacyKvResult = await pool.query<{ value: string }>(`SELECT value FROM kv WHERE key = 'latest_app_version'`);
+  res.status(200).json({ success: true, inserted: result.rowCount ?? 0, latest_app_version: legacyKvResult.rows[0]?.value ?? '0.1.0' });
 });
 
 export default router;

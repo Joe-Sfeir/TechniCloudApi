@@ -483,4 +483,45 @@ router.get('/licenses', async (_req: Request, res: Response): Promise<void> => {
   res.status(200).json(result.rows);
 });
 
+// ── POST /api/admin/publish-update ───────────────────────────────────────────
+
+router.post('/publish-update', requireRole('MASTER'), async (req: Request, res: Response): Promise<void> => {
+  const { version, notes, url } = req.body as Record<string, unknown>;
+
+  if (typeof version !== 'string' || version.trim().length === 0) {
+    res.status(400).json({ error: 'version is required.' });
+    return;
+  }
+  if (typeof notes !== 'string') {
+    res.status(400).json({ error: 'notes must be a string.' });
+    return;
+  }
+  if (typeof url !== 'string') {
+    res.status(400).json({ error: 'url must be a string.' });
+    return;
+  }
+
+  await pool.query(`UPDATE kv SET value = $1 WHERE key = 'latest_app_version'`, [version.trim()]);
+  await pool.query(`UPDATE kv SET value = $1 WHERE key = 'update_notes'`,       [notes]);
+  await pool.query(`UPDATE kv SET value = $1 WHERE key = 'update_url'`,         [url]);
+
+  res.status(200).json({ message: 'Update published.' });
+});
+
+// ── GET /api/admin/app-version ────────────────────────────────────────────────
+
+router.get('/app-version', async (_req: Request, res: Response): Promise<void> => {
+  const result = await pool.query<{ key: string; value: string }>(
+    `SELECT key, value FROM kv WHERE key IN ('latest_app_version', 'update_notes', 'update_url')`,
+  );
+
+  const map = Object.fromEntries(result.rows.map((r) => [r.key, r.value]));
+
+  res.status(200).json({
+    version: map['latest_app_version'] ?? '0.1.0',
+    notes:   map['update_notes']       ?? '',
+    url:     map['update_url']         ?? '',
+  });
+});
+
 export default router;
