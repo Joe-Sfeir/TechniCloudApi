@@ -101,7 +101,7 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
   );
 
   if (projectId !== undefined) {
-    broadcast(projectId, 'telemetry', {
+    broadcast(Number(projectId), 'telemetry', {
       rows: [{ device_name: device_name.trim(), timestamp: parsedTimestamp.toISOString(), data }],
     });
   }

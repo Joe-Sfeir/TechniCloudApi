@@ -576,9 +576,9 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     // Broadcast to connected SSE dashboard clients (fires only after DB writes succeed)
     console.log('[sse-debug] about to broadcast, projectId=', project_id, 'rows=', telemetry_array.length);
     if (telemetry_array.length > 0) {
-      broadcast(project_id, 'telemetry', { rows: telemetry_array });
+      broadcast(Number(project_id), 'telemetry', { rows: telemetry_array });
     }
-    broadcast(project_id, 'nodes', {
+    broadcast(Number(project_id), 'nodes', {
       machine_id:     onlineResult.rows[0]!.machine_id,
       polling_state:  resolvedPollingState,
       active_devices: active_devices ?? [],
@@ -636,7 +636,7 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
   }
 
   if (projectId !== undefined && telemetry_array.length > 0) {
-    broadcast(projectId, 'telemetry', { rows: telemetry_array });
+    broadcast(Number(projectId), 'telemetry', { rows: telemetry_array });
   }
 
   const legacyKvResult = await pool.query<{ value: string }>(`SELECT value FROM kv WHERE key = 'latest_app_version'`);
