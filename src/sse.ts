@@ -13,6 +13,7 @@ function getClients(): Map<number, Set<Response>> {
 }
 
 export function addClient(projectId: number, res: Response): void {
+  console.log('[sse-debug] addClient called, projectId=', projectId, 'type=', typeof projectId);
   const clients = getClients();
   if (!clients.has(projectId)) clients.set(projectId, new Set());
   clients.get(projectId)!.add(res);
@@ -23,7 +24,7 @@ export function removeClient(projectId: number, res: Response): void {
 }
 
 export function broadcast(projectId: number, eventType: string, data: unknown): void {
-  console.log('[sse-debug] broadcast called, projectId=', projectId, 'clients=', getClients().get(projectId)?.size ?? 0);
+  console.log('[sse-debug] broadcast lookup, projectId=', projectId, 'type=', typeof projectId, 'mapKeys=', [...getClients().keys()]);
   const clients = getClients();
   const projectClients = clients.get(projectId);
   if (!projectClients || projectClients.size === 0) return;
