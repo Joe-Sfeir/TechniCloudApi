@@ -1,18 +1,30 @@
 import type { Response } from 'express';
 
-const clients = new Map<number, Set<Response>>();
+// Use globalThis to guarantee a single shared Map regardless of how ts-node ESM
+// resolves the module — duplicate specifier resolution creates two module instances
+// each with their own Map, causing addClient and broadcast to see different state.
+const GLOBAL_KEY = '__technidaq_sse_clients__' as const;
+
+function getClients(): Map<number, Set<Response>> {
+  if (!(globalThis as Record<string, unknown>)[GLOBAL_KEY]) {
+    (globalThis as Record<string, unknown>)[GLOBAL_KEY] = new Map<number, Set<Response>>();
+  }
+  return (globalThis as Record<string, unknown>)[GLOBAL_KEY] as Map<number, Set<Response>>;
+}
 
 export function addClient(projectId: number, res: Response): void {
+  const clients = getClients();
   if (!clients.has(projectId)) clients.set(projectId, new Set());
   clients.get(projectId)!.add(res);
 }
 
 export function removeClient(projectId: number, res: Response): void {
-  clients.get(projectId)?.delete(res);
+  getClients().get(projectId)?.delete(res);
 }
 
 export function broadcast(projectId: number, eventType: string, data: unknown): void {
-  console.log('[sse-debug] broadcast called, projectId=', projectId, 'clients=', clients.get(projectId)?.size ?? 0);
+  console.log('[sse-debug] broadcast called, projectId=', projectId, 'clients=', getClients().get(projectId)?.size ?? 0);
+  const clients = getClients();
   const projectClients = clients.get(projectId);
   if (!projectClients || projectClients.size === 0) return;
   const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -29,5 +41,5 @@ export function broadcast(projectId: number, eventType: string, data: unknown): 
 }
 
 export function getClientCount(projectId: number): number {
-  return clients.get(projectId)?.size ?? 0;
+  return getClients().get(projectId)?.size ?? 0;
 }
