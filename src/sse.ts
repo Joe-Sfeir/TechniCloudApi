@@ -12,6 +12,7 @@ export function removeClient(projectId: number, res: Response): void {
 }
 
 export function broadcast(projectId: number, eventType: string, data: unknown): void {
+  console.log('[sse-debug] broadcast called, projectId=', projectId, 'clients=', clients.get(projectId)?.size ?? 0);
   const projectClients = clients.get(projectId);
   if (!projectClients || projectClients.size === 0) return;
   const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
