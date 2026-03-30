@@ -9,7 +9,8 @@
       "Bash(git rm:*)",
       "Bash(find /c/Users/Joe/Desktop/technidaq-cloud-api -type f \\\\\\(-name *.tsx -o -name *.jsx -o -name *.css -o -name colors* -o -name *token* \\\\\\))",
       "Bash(grep -E \"\\\\.\\(json|md|ts\\)$\")",
-      "Bash(grep -rn \"GET\\\\|POST\" /c/Users/Joe/Desktop/technidaq-cloud-api/src/routes/*.ts)"
+      "Bash(grep -rn \"GET\\\\|POST\" /c/Users/Joe/Desktop/technidaq-cloud-api/src/routes/*.ts)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

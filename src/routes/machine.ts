@@ -3,6 +3,7 @@ import express from 'express';
 import type { Request, Response } from 'express';
 import { createDecipheriv, createHash, randomBytes } from 'crypto';
 import { pool } from '../db';
+import { broadcast } from '../sse.js';
 
 const router = Router();
 
@@ -463,13 +464,14 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
   const onlineResult = await pool.query<{
     project_id: number;
     activation_id: number;
+    machine_id: string;
     config_pending: boolean;
     profiles_pending: boolean;
     allowed_meters: unknown[];
     protocols: string;
     tier: number;
   }>(
-    `SELECT pa.project_id, pa.id AS activation_id,
+    `SELECT pa.project_id, pa.id AS activation_id, pa.machine_id,
             pa.config_pending, pa.profiles_pending,
             p.allowed_meters, p.protocols, p.tier
      FROM project_activations pa
@@ -570,6 +572,17 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
       [activationId, JSON.stringify(active_devices ?? []), JSON.stringify(thresholds ?? {}), resolvedPollingState, JSON.stringify(current_config ?? [])],
     );
     console.log('[ingest-debug] UPDATE result rowCount:', updateResult.rowCount);
+
+    // Broadcast to connected SSE dashboard clients (fires only after DB writes succeed)
+    if (telemetry_array.length > 0) {
+      broadcast(project_id, 'telemetry', { rows: telemetry_array });
+    }
+    broadcast(project_id, 'nodes', {
+      machine_id:     onlineResult.rows[0]!.machine_id,
+      polling_state:  resolvedPollingState,
+      active_devices: active_devices ?? [],
+      thresholds:     thresholds ?? {},
+    });
 
     // Always fetch the latest config and current app version in parallel
     const [configResult, kvResult] = await Promise.all([

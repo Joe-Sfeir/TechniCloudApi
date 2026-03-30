@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import type { QueryResult } from 'pg';
 import { pool } from '../db';
 import { requireAuth } from '../middleware/auth';
+import { broadcast } from '../sse.js';
 
 const router = Router();
 
@@ -98,6 +99,12 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
      VALUES ($1, $2, $3, $4)`,
     [projectId, device_name.trim(), parsedTimestamp, data],
   );
+
+  if (projectId !== undefined) {
+    broadcast(projectId, 'telemetry', {
+      rows: [{ device_name: device_name.trim(), timestamp: parsedTimestamp.toISOString(), data }],
+    });
+  }
 
   res.status(200).json({ success: true, message: 'Telemetry ingested.' });
 });
