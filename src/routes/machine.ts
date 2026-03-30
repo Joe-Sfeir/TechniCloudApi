@@ -635,6 +635,10 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
+  if (projectId !== undefined && telemetry_array.length > 0) {
+    broadcast(projectId, 'telemetry', { rows: telemetry_array });
+  }
+
   const legacyKvResult = await pool.query<{ value: string }>(`SELECT value FROM kv WHERE key = 'latest_app_version'`);
   res.status(200).json({ success: true, inserted: result.rowCount ?? 0, latest_app_version: legacyKvResult.rows[0]?.value ?? '0.1.0' });
 });
