@@ -574,7 +574,6 @@ router.post('/ingest', async (req: Request, res: Response): Promise<void> => {
     console.log('[ingest-debug] UPDATE result rowCount:', updateResult.rowCount);
 
     // Broadcast to connected SSE dashboard clients (fires only after DB writes succeed)
-    console.log('[sse-debug] about to broadcast, projectId=', project_id, 'rows=', telemetry_array.length);
     if (telemetry_array.length > 0) {
       broadcast(Number(project_id), 'telemetry', { rows: telemetry_array });
     }
