@@ -3,7 +3,7 @@ import express from 'express';
 import type { Request, Response } from 'express';
 import { createDecipheriv, createHash, randomBytes } from 'crypto';
 import { pool } from '../db';
-import { broadcast } from '../sse.js';
+import { broadcast } from '../sse';
 
 const router = Router();
 

@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import type { QueryResult } from 'pg';
 import { pool } from '../db';
 import { requireAuth } from '../middleware/auth';
-import { broadcast } from '../sse.js';
+import { broadcast } from '../sse';
 
 const router = Router();
 

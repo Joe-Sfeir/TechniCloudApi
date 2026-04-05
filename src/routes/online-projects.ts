@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { randomBytes } from 'crypto';
-import { pool } from '../db.js';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { pool } from '../db';
+import { requireAuth, requireRole } from '../middleware/auth';
 
 const router = Router();
 

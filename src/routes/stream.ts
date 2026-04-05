@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
-import { pool } from '../db.js';
-import { requireAuth } from '../middleware/auth.js';
-import { addClient, removeClient, getClientCount } from '../sse.js';
+import { pool } from '../db';
+import { requireAuth } from '../middleware/auth';
+import { addClient, removeClient, getClientCount } from '../sse';
 
 const router = Router();
 
