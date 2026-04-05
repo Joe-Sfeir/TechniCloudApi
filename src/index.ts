@@ -15,6 +15,7 @@ import machineRouter        from './routes/machine';
 import exportRouter         from './routes/export';
 import meterProfilesRouter  from './routes/meter-profiles';
 import streamRouter          from './routes/stream';
+import devopsRouter          from './routes/devops';
 
 // ── Startup guards ────────────────────────────────────────────────────────────
 
@@ -97,6 +98,7 @@ app.use('/api/admin',    globalLimiter, meterProfilesRouter);
 app.use('/api/export',   globalLimiter, exportRouter);
 // machine router carries its own express.json({ limit: '5mb' }) for batch ingest
 app.use('/api/machine',  ingestLimiter, machineRouter);
+app.use('/api/admin/devops', globalLimiter, devopsRouter);
 // SSE stream — long-lived connections use globalLimiter, not ingestLimiter
 app.use('/api',          globalLimiter, streamRouter);
 app.use('/api',          ingestLimiter, ingestRouter);
